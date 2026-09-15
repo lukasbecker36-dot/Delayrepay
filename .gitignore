@@ -1,0 +1,14 @@
+node_modules/
+dist/
+coverage/
+
+# Credentials never get committed. See .env.example.
+.env
+.env.*
+!.env.example
+
+# On-disk HSP cache holds journey data - keep it local.
+.cache/
+
+*.log
+.DS_Store

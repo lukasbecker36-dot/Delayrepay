@@ -1,0 +1,33 @@
+{
+  "serviceAttributesDetails": {
+    "date_of_service": "2026-09-09",
+    "toc_code": "SN",
+    "rid": "202609090591234",
+    "locations": [
+      {
+        "location": "BTN",
+        "gbtt_ptd": "0715",
+        "gbtt_pta": "",
+        "actual_td": "",
+        "actual_ta": "",
+        "late_canc_reason": "574"
+      },
+      {
+        "location": "HHE",
+        "gbtt_ptd": "0733",
+        "gbtt_pta": "0732",
+        "actual_td": "",
+        "actual_ta": "",
+        "late_canc_reason": "574"
+      },
+      {
+        "location": "VIC",
+        "gbtt_ptd": "",
+        "gbtt_pta": "0817",
+        "actual_td": "",
+        "actual_ta": "",
+        "late_canc_reason": "574"
+      }
+    ]
+  }
+}

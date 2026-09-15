@@ -1,0 +1,49 @@
+{
+  "header": {
+    "from_location": "BTN",
+    "to_location": "VIC",
+    "from_time": "0700",
+    "to_time": "0800",
+    "from_date": "2026-08-17",
+    "to_date": "2026-09-14",
+    "days": "WEEKDAY"
+  },
+  "Services": [
+    {
+      "serviceAttributesMetrics": {
+        "origin_location": "BTN",
+        "destination_location": "VIC",
+        "gbtt_ptd": "0715",
+        "gbtt_pta": "0817",
+        "toc_code": "SN",
+        "matched_services": "3",
+        "rids": [
+          "202609070591234",
+          "202609080591234",
+          "202609090591234"
+        ]
+      },
+      "Metrics": [
+        {
+          "tolerance_value": "0",
+          "num_not_tolerance": "2",
+          "num_tolerance": "1",
+          "percent_tolerance": "33",
+          "global_tolerance": false
+        }
+      ]
+    },
+    {
+      "serviceAttributesMetrics": {
+        "origin_location": "BTN",
+        "destination_location": "VIC",
+        "gbtt_ptd": "0745",
+        "gbtt_pta": "0847",
+        "toc_code": "SN",
+        "matched_services": "1",
+        "rids": ["202609070591299"]
+      },
+      "Metrics": []
+    }
+  ]
+}

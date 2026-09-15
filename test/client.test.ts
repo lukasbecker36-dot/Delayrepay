@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { HspClient } from '../src/hsp/client.js';
-import { HspError } from '../src/hsp/errors.js';
+import { HspError, describeHspFailure } from '../src/hsp/errors.js';
 
 interface Call {
   readonly url: string;
@@ -23,6 +23,9 @@ const json = (body: unknown, status = 200) => async () =>
   new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
 
 const status = (code: number) => async () => new Response('', { status: code });
+
+const statusWithBody = (code: number, body: string) => async () =>
+  new Response(body, { status: code });
 
 function clientWith(fetchImpl: typeof fetch, overrides = {}) {
   return new HspClient({
@@ -138,6 +141,68 @@ describe('failures the scan cannot recover from', () => {
     expect((error as HspError).kind).toBe('auth');
     expect((error as HspError).retryable).toBe(false);
     expect(calls).toHaveLength(1);
+  });
+
+  it('does not blame the credentials for a 403', async () => {
+    // A 403 can be HSP refusing an unsubscribed account, or a proxy, firewall or
+    // egress allowlist that the request never got past. In none of those cases
+    // were the credentials tested, so reporting them as rejected sends the user
+    // off to rotate a password that was working.
+    const { impl, calls } = stubFetch([status(403)]);
+    const error = await clientWith(impl).serviceMetrics(METRICS_QUERY).catch((e: unknown) => e);
+
+    expect((error as HspError).kind).toBe('blocked');
+    expect((error as HspError).status).toBe(403);
+    expect((error as HspError).retryable).toBe(false);
+    expect(calls).toHaveLength(1);
+
+    const described = describeHspFailure(error as HspError);
+    expect(described).not.toContain('HSP_PASSWORD');
+    expect(described).toContain('not the same as a wrong password');
+  });
+
+  it('keeps 401 as a credentials problem', async () => {
+    const { impl } = stubFetch([status(401)]);
+    const error = await clientWith(impl).serviceMetrics(METRICS_QUERY).catch((e: unknown) => e);
+
+    expect((error as HspError).kind).toBe('auth');
+    expect(describeHspFailure(error as HspError)).toContain('HSP_PASSWORD');
+  });
+
+  it('keeps what the far end said, which is usually the whole diagnosis', async () => {
+    const { impl } = stubFetch([
+      statusWithBody(403, 'Host not in allowlist: hsp-prod.rockshore.net.'),
+    ]);
+    const error = await clientWith(impl).serviceMetrics(METRICS_QUERY).catch((e: unknown) => e);
+
+    expect((error as HspError).detail).toBe('Host not in allowlist: hsp-prod.rockshore.net.');
+    expect(describeHspFailure(error as HspError)).toContain('hsp-prod.rockshore.net');
+  });
+
+  it('never lets a credential out through an echoed error body', async () => {
+    const encoded = Buffer.from('someone@example.com:hunter2').toString('base64');
+    const { impl } = stubFetch([
+      statusWithBody(403, `Rejected request with Authorization: Basic ${encoded} from someone@example.com`),
+    ]);
+    const error = await clientWith(impl).serviceMetrics(METRICS_QUERY).catch((e: unknown) => e);
+
+    const detail = (error as HspError).detail ?? '';
+    expect(detail).not.toContain(encoded);
+    expect(detail).not.toContain('someone@example.com');
+    expect(detail).not.toContain('hunter2');
+    expect(detail).toContain('[redacted]');
+  });
+
+  it('collapses a sprawling error page to one readable line', async () => {
+    const { impl } = stubFetch([statusWithBody(500, `<html>\n  <body>\n    ${'x'.repeat(500)}\n  </body>\n</html>`)]);
+    const error = await clientWith(impl, { maxAttempts: 1 })
+      .serviceMetrics(METRICS_QUERY)
+      .catch((e: unknown) => e);
+
+    const detail = (error as HspError).detail ?? '';
+    expect(detail).not.toContain('\n');
+    expect(detail.length).toBeLessThanOrEqual(303);
+    expect(detail.endsWith('...')).toBe(true);
   });
 
   it('does not retry a response it cannot parse', async () => {

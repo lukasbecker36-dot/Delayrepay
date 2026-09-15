@@ -8,7 +8,7 @@
  */
 
 import { classifyJourney } from './domain/classify.js';
-import { summariseScan } from './domain/copy.js';
+import { summariseScan, type ScanCoverage } from './domain/copy.js';
 import { addDays, daysBetween, parseIsoDate } from './domain/window.js';
 import type { JourneyAssessment, ServiceRecord } from './domain/types.js';
 import type { DayType, HspClient } from './hsp/client.js';
@@ -74,6 +74,13 @@ export interface ScanResult {
   readonly failures: readonly ScanFailure[];
   /** True when at least one lookup failed, so the list may be incomplete. */
   readonly partial: boolean;
+  /**
+   * How much of the range was actually read.
+   *
+   * A caller must be able to tell "checked, found nothing claimable" from
+   * "checked nothing" without inspecting the prose.
+   */
+  readonly coverage: ScanCoverage;
   readonly summary: string;
 }
 
@@ -114,20 +121,24 @@ export async function runScan(
   const cache = options.cache ?? new NullCache();
   const days = request.days ?? 'WEEKDAY';
   const failures: ScanFailure[] = [];
+  const dates = expectedDates(request.fromDate, request.toDate, days);
 
   let matches: readonly MatchedService[];
   try {
     matches = await fetchMetrics(client, request, days, cache);
   } catch (error) {
     // Nothing to work with. The caller still holds the request, so the user's
-    // input is not lost - they can retry without retyping it.
+    // input is not lost - they can retry without retyping it. The summary has
+    // to say that nothing was read, not that nothing was found.
     const failure = toFailure(error, null, null);
+    const coverage: ScanCoverage = { expected: dates.length, checked: 0 };
     return {
       request,
       assessments: [],
       failures: [failure],
       partial: true,
-      summary: failure.message,
+      coverage,
+      summary: `${summariseScan([], coverage)} ${failure.message}`,
     };
   }
 
@@ -157,7 +168,7 @@ export async function runScan(
 
   const assessments: JourneyAssessment[] = [];
   const skipped: string[] = [];
-  for (const date of expectedDates(request.fromDate, request.toDate, days)) {
+  for (const date of dates) {
     const onThatDate = byDate.get(date) ?? [];
 
     if (onThatDate.length === 0) {
@@ -191,12 +202,20 @@ export async function runScan(
 
   assessments.sort((a, b) => a.date.localeCompare(b.date));
 
+  // Counted by date, not by assessment: a date can carry more than one service,
+  // and a date we could not read carries none.
+  const coverage: ScanCoverage = {
+    expected: dates.length,
+    checked: new Set(assessments.map((a) => a.date)).size,
+  };
+
   return {
     request,
     assessments,
     failures,
     partial: failures.length > 0,
-    summary: summariseScan(assessments),
+    coverage,
+    summary: summariseScan(assessments, coverage),
   };
 }
 

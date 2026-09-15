@@ -100,6 +100,9 @@ describe('the words the tool is allowed to use', () => {
       summariseScan(EVERY_OUTCOME),
       summariseScan([ON_TIME]),
       summariseScan([]),
+      summariseScan([], { expected: 5, checked: 0 }),
+      summariseScan([], { expected: 0, checked: 0 }),
+      summariseScan([ON_TIME], { expected: 5, checked: 1 }),
     ];
 
     for (const sentence of everySentence) {
@@ -162,6 +165,36 @@ describe('summariseScan', () => {
 
   it('says so plainly when there is nothing to claim', () => {
     expect(summariseScan([ON_TIME])).toBe('No journeys in this range look claimable.');
+  });
+
+  it('never reports a scan that read nothing as a scan that found nothing', () => {
+    // The difference between "we looked and there is nothing to claim" and "we
+    // could not look" is the difference between a result and a failure. Blurring
+    // them is how someone lets a 28-day window close on a claim they had.
+    const summary = summariseScan([], { expected: 5, checked: 0 });
+
+    expect(summary).not.toContain('No journeys in this range look claimable');
+    expect(summary).toContain('Nothing could be checked');
+    expect(summary).toContain('5 journeys');
+  });
+
+  it('leads with incompleteness when only some of the range was read', () => {
+    const summary = summariseScan([ON_TIME], { expected: 5, checked: 1 });
+
+    expect(summary.startsWith('Only 1 of 5 journeys')).toBe(true);
+    expect(summary).toContain('may be incomplete');
+  });
+
+  it('stays a plain finding when the whole range was read', () => {
+    expect(summariseScan([ON_TIME], { expected: 1, checked: 1 })).toBe(
+      'No journeys in this range look claimable.',
+    );
+  });
+
+  it('does not claim a failure when there was nothing in range to check', () => {
+    expect(summariseScan([], { expected: 0, checked: 0 })).toBe(
+      'No journeys in this range to check.',
+    );
   });
 
   it('uses the singular for one journey', () => {

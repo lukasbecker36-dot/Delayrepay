@@ -63,17 +63,59 @@ export function describeWhereToClaim(assessment: JourneyAssessment): string {
 }
 
 /**
+ * How much of what the scan set out to check it actually managed to check.
+ *
+ * Passed separately from the assessments because the difference between them is
+ * the whole point: an empty result list means "we looked and found nothing" only
+ * if we looked.
+ */
+export interface ScanCoverage {
+  /** Journey dates the scan set out to check. */
+  readonly expected: number;
+  /** How many of those it got performance data for, one way or the other. */
+  readonly checked: number;
+}
+
+/**
  * The line at the top of a batch of results.
  *
  * One message covering every candidate, never one per journey - four emails
  * about four delays is the behaviour of a product that has stopped being useful.
+ *
+ * Pass `coverage` wherever it is known. Without it this can only describe the
+ * assessments it is given, and a scan that failed outright has no assessments -
+ * which reads exactly like a scan that found nothing wrong.
  */
-export function summariseScan(assessments: readonly JourneyAssessment[]): string {
+export function summariseScan(
+  assessments: readonly JourneyAssessment[],
+  coverage?: ScanCoverage,
+): string {
+  // "No journeys look claimable" is a finding, and a finding has to be earned.
+  // Saying it after a scan that read no data at all is how someone lets a
+  // 28-day window close believing they had been told there was nothing there.
+  if (coverage && coverage.checked === 0) {
+    if (coverage.expected === 0) return 'No journeys in this range to check.';
+    return (
+      `Nothing could be checked. None of the ${coverage.expected} ` +
+      `${coverage.expected === 1 ? 'journey' : 'journeys'} in this range could be ` +
+      'looked up, so this is not a result - it is a failure to read the data.'
+    );
+  }
+
   const claimable = assessments.filter((a) => a.looksClaimable);
   const unchecked = assessments.filter((a) => !a.looksClaimable && a.needsManualCheck);
   const tooRecent = assessments.filter((a) => a.outcome === 'awaiting-data');
 
   const parts: string[] = [];
+
+  // Leads, rather than trailing as a footnote, because it changes how every
+  // sentence after it should be read.
+  if (coverage && coverage.checked < coverage.expected) {
+    parts.push(
+      `Only ${coverage.checked} of ${coverage.expected} journeys in this range could ` +
+        'be checked, so this list may be incomplete.',
+    );
+  }
 
   if (claimable.length === 0) {
     parts.push('No journeys in this range look claimable.');

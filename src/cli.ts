@@ -11,7 +11,7 @@ import { HspError } from './hsp/errors.js';
 import { FileCache } from './hsp/cache.js';
 import { runScan, type ScanRequest } from './scan.js';
 import { addDays } from './domain/window.js';
-import { describeExpiry, describeOutcome, describeWhereToClaim, summariseScan } from './domain/copy.js';
+import { describeExpiry, describeOutcome, describeWhereToClaim } from './domain/copy.js';
 import type { DayType } from './hsp/client.js';
 import type { JourneyAssessment } from './domain/types.js';
 
@@ -157,19 +157,39 @@ async function main(): Promise<void> {
     process.stdout.write(`${formatJourney(journey)}\n`);
   }
 
-  process.stdout.write(`\n${summariseScan(result.assessments)}\n`);
+  // The scan's own summary, not one recomputed from the assessments here. A
+  // scan that read nothing has no assessments, and summarising that list alone
+  // would announce "no journeys look claimable" about journeys never checked.
+  process.stdout.write(`\n${result.summary}\n`);
 
-  if (result.failures.length > 0) {
+  // The "could not check" list itemises which journeys were lost. A failure the
+  // summary has already spelled out in full adds nothing by being repeated -
+  // but anything it has not said still has to be shown, so this filters on what
+  // the summary actually contains rather than assuming.
+  const itemised = result.failures.filter((failure) => !result.summary.includes(failure.message));
+
+  if (itemised.length > 0) {
     process.stdout.write('\nCould not check:\n');
-    for (const failure of result.failures) {
-      process.stdout.write(`  ${failure.date ?? failure.rid ?? '-'}  ${failure.message}\n`);
+    for (const failure of itemised) {
+      // A failure with neither date nor RID cost us the whole range, not one
+      // journey. Printing a bare "-" hid the difference.
+      const scope = failure.date ?? failure.rid ?? 'the whole range';
+      process.stdout.write(`  ${scope.padEnd(12)}  ${failure.message}\n`);
     }
   }
 
-  process.stdout.write(
-    '\nCheck these against your own memory of the journey. If one is wrong, that ' +
-      'is the bug worth chasing.\n',
-  );
+  if (result.coverage.checked > 0) {
+    process.stdout.write(
+      '\nCheck these against your own memory of the journey. If one is wrong, that ' +
+        'is the bug worth chasing.\n',
+    );
+  }
+
+  // Nothing was read. Exit non-zero so this cannot be mistaken - by a script or
+  // by a tired person - for a clean scan that found nothing to claim.
+  if (result.coverage.checked === 0 && result.coverage.expected > 0) {
+    process.exitCode = 1;
+  }
 }
 
 main().catch((error: unknown) => {

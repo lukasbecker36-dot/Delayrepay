@@ -250,6 +250,45 @@ describe('when HSP is having a bad day', () => {
     expect(result.failures[0]?.kind).toBe('auth');
     expect(result.failures[0]?.message).toContain('HSP_EMAIL');
   });
+
+  it('summarises a total failure as a failure, not as nothing to claim', async () => {
+    // The scan read no data at all. Announcing "no journeys look claimable"
+    // here would be the tool asserting a finding it has no basis for.
+    const blocked = fakeClient({ metricsError: new HspError('blocked', '403') });
+    const result = await runScan(blocked.client, REQUEST);
+
+    expect(result.summary).not.toContain('No journeys in this range look claimable');
+    expect(result.summary).toContain('Nothing could be checked');
+    expect(result.coverage).toEqual({ expected: 5, checked: 0 });
+  });
+
+  it('counts coverage by date, so a clean scan is distinguishable from a failed one', async () => {
+    const working = fakeClient({
+      metrics: [service(['r-mon'])],
+      details: { 'r-mon': arriving('r-mon', '2026-09-07', '0720') },
+    });
+    const result = await runScan(working.client, REQUEST);
+
+    // Five weekdays in range, all five accounted for: four as services HSP has
+    // no record of, one as a journey that ran. "HSP has no record" is a finding
+    // we went and got, so it counts as checked - unlike a lookup that failed.
+    expect(result.coverage).toEqual({ expected: 5, checked: 5 });
+    expect(result.summary).not.toContain('may be incomplete');
+    expect(result.summary).not.toContain('Nothing could be checked');
+    expect(result.summary.startsWith('No journeys in this range look claimable.')).toBe(true);
+  });
+
+  it('says how much of the range it missed when only part of it failed', async () => {
+    const partly = fakeClient({
+      metrics: [service(['r-mon', 'r-tue'])],
+      details: { 'r-mon': arriving('r-mon', '2026-09-07', '0851') },
+      detailErrors: { 'r-tue': new HspError('unavailable', 'down') },
+    });
+    const result = await runScan(partly.client, REQUEST);
+
+    expect(result.coverage.checked).toBeLessThan(result.coverage.expected);
+    expect(result.summary).toContain('may be incomplete');
+  });
 });
 
 describe('caching', () => {

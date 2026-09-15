@@ -6,7 +6,7 @@
  * where the credentials belong regardless.
  */
 
-import { HspError } from './errors.js';
+import { HspError, type HspFailureKind } from './errors.js';
 import {
   parseServiceDetails,
   parseServiceMetrics,
@@ -59,6 +59,7 @@ function defaultSleep(ms: number): Promise<void> {
 
 export class HspClient {
   readonly #authorization: string;
+  readonly #secrets: readonly string[];
   readonly #baseUrl: string;
   readonly #timeoutMs: number;
   readonly #maxAttempts: number;
@@ -69,9 +70,11 @@ export class HspClient {
     if (!options.email || !options.password) {
       throw new HspError('auth', 'HSP credentials are required.');
     }
-    this.#authorization = `Basic ${Buffer.from(
-      `${options.email}:${options.password}`,
-    ).toString('base64')}`;
+    const encoded = Buffer.from(`${options.email}:${options.password}`).toString('base64');
+    this.#authorization = `Basic ${encoded}`;
+    // An upstream error body is echoed to the user, and some intermediaries echo
+    // the request back. Never let that be the path a credential escapes by.
+    this.#secrets = [encoded, options.password, options.email];
     this.#baseUrl = (options.baseUrl ?? DEFAULT_BASE_URL).replace(/\/+$/, '');
     this.#timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     this.#maxAttempts = options.maxAttempts ?? DEFAULT_MAX_ATTEMPTS;
@@ -113,6 +116,15 @@ export class HspClient {
       }
       throw error;
     }
+  }
+
+  #redact(text: string | null): string | null {
+    if (text === null) return null;
+    let safe = text;
+    for (const secret of this.#secrets) {
+      if (secret) safe = safe.split(secret).join('[redacted]');
+    }
+    return safe;
   }
 
   async #post(path: string, body: Record<string, unknown>): Promise<unknown> {
@@ -165,6 +177,7 @@ export class HspClient {
     if (!response.ok) {
       throw new HspError(statusToKind(response.status), `${path} returned ${response.status}`, {
         status: response.status,
+        detail: this.#redact(await readBody(response)),
       });
     }
 
@@ -176,8 +189,31 @@ export class HspClient {
   }
 }
 
-function statusToKind(status: number): 'auth' | 'rate-limited' | 'unavailable' | 'unknown' {
-  if (status === 401 || status === 403) return 'auth';
+/** How much of an error body is worth showing. Enough for a proxy to name itself. */
+const MAX_DETAIL_LENGTH = 300;
+
+/** The far end's own words, collapsed to one readable line. */
+async function readBody(response: Response): Promise<string | null> {
+  let text: string;
+  try {
+    text = await response.text();
+  } catch {
+    return null;
+  }
+  const collapsed = text.replace(/\s+/g, ' ').trim();
+  if (collapsed === '') return null;
+  return collapsed.length > MAX_DETAIL_LENGTH
+    ? `${collapsed.slice(0, MAX_DETAIL_LENGTH)}...`
+    : collapsed;
+}
+
+function statusToKind(status: number): HspFailureKind {
+  // 401 and 403 must not collapse into one kind. Only 401 is evidence about the
+  // credentials; 403 is just as likely to be a proxy or an unsubscribed account,
+  // and telling someone their password is wrong when it was never tried sends
+  // them off to fix something that is not broken.
+  if (status === 401) return 'auth';
+  if (status === 403) return 'blocked';
   if (status === 429) return 'rate-limited';
   if (status >= 500) return 'unavailable';
   return 'unknown';

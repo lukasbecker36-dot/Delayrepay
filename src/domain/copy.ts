@@ -13,12 +13,30 @@
 import type { JourneyAssessment } from './types.js';
 import type { ClaimWindow } from './window.js';
 
+/** "HHMM" as "HH:MM", for prose rather than for the times column. */
+export function formatClockTime(time: string): string {
+  return /^\d{4}$/.test(time) ? `${time.slice(0, 2)}:${time.slice(2)}` : time;
+}
+
+/**
+ * Lateness in words.
+ *
+ * A train can arrive early, and "arrived -1 minutes late" both reads as
+ * nonsense and quietly undermines every number printed next to it.
+ */
+export function describeLateness(minutes: number): string {
+  if (minutes > 0) return `${minutes} ${minutes === 1 ? 'minute' : 'minutes'} late`;
+  if (minutes === 0) return 'on time';
+  const early = Math.abs(minutes);
+  return `${early} ${early === 1 ? 'minute' : 'minutes'} early`;
+}
+
 /** How a journey reads in a list of results. */
 export function describeOutcome(assessment: JourneyAssessment): string {
   switch (assessment.outcome) {
     case 'delayed':
       return (
-        `Arrived ${assessment.delayMinutes} minutes late, at or over the ` +
+        `Arrived ${describeLateness(assessment.delayMinutes ?? 0)}, at or over the ` +
         `${assessment.thresholdMinutes}-minute threshold. This looks claimable.`
       );
     case 'arrival-not-recorded':
@@ -26,9 +44,25 @@ export function describeOutcome(assessment: JourneyAssessment): string {
         'No arrival recorded, which usually means the service was cancelled. ' +
         'This looks claimable.'
       );
+    case 'did-not-call': {
+      // Deliberately not phrased as a delay figure for this journey: the train
+      // never reached the destination, so there is no arrival to be late for.
+      const seen = assessment.lastRecordedCall;
+      const where =
+        seen === null
+          ? ''
+          : ` It was last recorded at ${seen.location}` +
+            (seen.minutesLate === null
+              ? '.'
+              : `, ${describeLateness(seen.minutesLate)} there.`);
+      return (
+        `This train ran but did not call at ${assessment.to}.${where} ` +
+        'This looks claimable.'
+      );
+    }
     case 'within-threshold':
       return (
-        `Arrived ${assessment.delayMinutes} minutes late, inside the ` +
+        `Arrived ${describeLateness(assessment.delayMinutes ?? 0)}, inside the ` +
         `${assessment.thresholdMinutes}-minute threshold.`
       );
     case 'service-not-found':

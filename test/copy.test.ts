@@ -42,6 +42,26 @@ const ON_TIME = assess([
   call('VIC', { scheduledArrival: '0817', actualArrival: '0819' }),
 ]);
 const NOT_FOUND = assess(null);
+const DID_NOT_CALL = classifyJourney({
+  record: {
+    rid: 'R2',
+    date: '2026-09-03',
+    tocCode: 'SN',
+    calls: [
+      call('BTN', { scheduledDeparture: '0715', actualDeparture: '0716', scheduledArrival: '0714' }),
+      call('HHE', { scheduledArrival: '0740', actualArrival: '0821' }),
+      call('VIC', { scheduledArrival: '0817', lateCancReason: '911' }),
+    ],
+  },
+  from: 'BTN',
+  to: 'VIC',
+  date: '2026-09-03',
+  today: TODAY,
+});
+const ARRIVED_EARLY = assess([
+  call('BTN', { scheduledDeparture: '0715', actualDeparture: '0715' }),
+  call('VIC', { scheduledArrival: '0817', actualArrival: '0816' }),
+]);
 const AWAITING = classifyJourney({
   record: null,
   from: 'BTN',
@@ -51,7 +71,7 @@ const AWAITING = classifyJourney({
   dataMayBeIncomplete: true,
 });
 
-const EVERY_OUTCOME = [DELAYED, CANCELLED, ON_TIME, NOT_FOUND, AWAITING];
+const EVERY_OUTCOME = [DELAYED, CANCELLED, DID_NOT_CALL, ON_TIME, NOT_FOUND, AWAITING];
 
 describe('the words the tool is allowed to use', () => {
   it('covers every outcome the classifier can produce', () => {
@@ -61,6 +81,7 @@ describe('the words the tool is allowed to use', () => {
       new Set([
         'delayed',
         'arrival-not-recorded',
+        'did-not-call',
         'within-threshold',
         'service-not-found',
         'awaiting-data',
@@ -71,6 +92,24 @@ describe('the words the tool is allowed to use', () => {
   it('says a journey looks claimable, and never that a claim is valid', () => {
     expect(describeOutcome(DELAYED)).toContain('looks claimable');
     expect(describeOutcome(CANCELLED)).toContain('looks claimable');
+    expect(describeOutcome(DID_NOT_CALL)).toContain('looks claimable');
+  });
+
+  it('never says a train arrived a negative number of minutes late', () => {
+    // "Arrived -1 minutes late" reads as broken arithmetic, and casts doubt on
+    // every figure printed beside it.
+    const sentence = describeOutcome(ARRIVED_EARLY);
+    expect(sentence).not.toContain('-1');
+    expect(sentence).toContain('1 minute early');
+  });
+
+  it('describes a terminated service without calling it a delay at the destination', () => {
+    const sentence = describeOutcome(DID_NOT_CALL);
+    expect(sentence).toContain('did not call at VIC');
+    expect(sentence).toContain('last recorded at HHE');
+    expect(sentence).toContain('41 minutes late');
+    // The arrival delay at VIC is unknown, and must not be implied.
+    expect(sentence).not.toContain('Arrived');
   });
 
   it('never asserts certainty or puts a figure on a claim', () => {
@@ -98,6 +137,7 @@ describe('the words the tool is allowed to use', () => {
         describeExpiry(claimWindowFor(journeyDate, TODAY)),
       ),
       summariseScan(EVERY_OUTCOME),
+      describeOutcome(ARRIVED_EARLY),
       summariseScan([ON_TIME]),
       summariseScan([]),
       summariseScan([], { expected: 5, checked: 0 }),
@@ -140,7 +180,7 @@ describe('describeExpiry', () => {
 describe('summariseScan', () => {
   it('is one message covering everything, not one per journey', () => {
     const summary = summariseScan(EVERY_OUTCOME);
-    expect(summary).toContain('2 journeys look claimable');
+    expect(summary).toContain('3 journeys look claimable');
     expect(summary).toContain('could not be checked');
     expect(summary).toContain('too recent to check yet');
   });

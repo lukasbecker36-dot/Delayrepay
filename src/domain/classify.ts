@@ -7,16 +7,45 @@
  */
 
 import { minutesLate, parseClockTime } from './time.js';
+import { describeLateness, formatClockTime } from './copy.js';
 import { claimWindowFor } from './window.js';
 import { resolveThreshold, DEFAULT_MINIMUM_DELAY_MINUTES } from './operators.js';
 import { spansClockChange } from './clockChange.js';
-import type { JourneyAssessment, ServiceCall, ServiceRecord } from './types.js';
+import type {
+  JourneyAssessment,
+  LastRecordedCall,
+  ServiceCall,
+  ServiceRecord,
+} from './types.js';
 
 /**
  * HSP's ambiguous code. It is attached both to delays and to cancellations, so
  * on its own it never settles which happened.
  */
 const AMBIGUOUS_REASON_CODE = '574';
+
+/**
+ * What to say about a reason code.
+ *
+ * Only 574 used to be mentioned, so every other code - 911 and 824 both turn up
+ * on real terminated-short services - was dropped silently. A code the tool
+ * cannot interpret is still worth handing over: the operator can read it, and
+ * the user is the one making the claim.
+ */
+function reasonCodeNotes(reasonCode: string | null): readonly string[] {
+  if (reasonCode === null) return [];
+  if (reasonCode === AMBIGUOUS_REASON_CODE) {
+    return [
+      `Reason code ${AMBIGUOUS_REASON_CODE} was recorded, which is used for both ` +
+        'delays and cancellations and so does not settle which happened.',
+    ];
+  }
+  return [
+    `Reason code ${reasonCode} was recorded against this service. This tool does ` +
+      'not interpret the code; the operator can.',
+  ];
+}
+
 
 export interface ClassifyInput {
   /** The matched service, or null when HSP returned nothing for this journey. */
@@ -42,6 +71,8 @@ export interface ClassifyInput {
 interface LegCalls {
   readonly origin: ServiceCall;
   readonly destination: ServiceCall;
+  /** Calls strictly between the two, in order. The evidence that a service ran. */
+  readonly between: readonly ServiceCall[];
 }
 
 function sameStation(a: string, b: string): boolean {
@@ -67,8 +98,43 @@ function findLeg(
     if (call && sameStation(call.location, to)) {
       const origin = calls[originIndex];
       if (!origin) return null;
-      return { origin, destination: call };
+      return { origin, destination: call, between: calls.slice(originIndex + 1, i) };
     }
+  }
+  return null;
+}
+
+/**
+ * The last call before the destination where the railway actually recorded the
+ * train, and how late it was there.
+ *
+ * This is what separates "the train ran and abandoned your journey" from "we
+ * have no idea what happened to this train". Both look identical at the
+ * destination - an absent arrival - and only the calls in between tell them
+ * apart.
+ */
+function lastRecordedCall(between: readonly ServiceCall[]): LastRecordedCall | null {
+  for (let i = between.length - 1; i >= 0; i -= 1) {
+    const call = between[i];
+    if (!call) continue;
+
+    // Prefer the arrival: it is the time a passenger at that station experienced.
+    const time = call.actualArrival ?? call.actualDeparture;
+    if (time === null) continue;
+
+    const scheduled =
+      call.actualArrival !== null ? call.scheduledArrival : call.scheduledDeparture;
+    const scheduledMinutes = parseClockTime(scheduled);
+    const actualMinutes = parseClockTime(time);
+
+    return {
+      location: call.location,
+      time,
+      minutesLate:
+        scheduledMinutes === null || actualMinutes === null
+          ? null
+          : minutesLate(scheduledMinutes, actualMinutes),
+    };
   }
   return null;
 }
@@ -120,6 +186,7 @@ export function classifyJourney(input: ClassifyInput): JourneyAssessment {
       actualDeparture: null,
       actualArrival: null,
       delayMinutes: null,
+      lastRecordedCall: null,
       outcome: 'awaiting-data',
       evidence: 'none',
       looksClaimable: false,
@@ -148,6 +215,7 @@ export function classifyJourney(input: ClassifyInput): JourneyAssessment {
       actualDeparture: null,
       actualArrival: null,
       delayMinutes: null,
+      lastRecordedCall: null,
       outcome: 'service-not-found',
       evidence: 'none',
       looksClaimable: false,
@@ -172,6 +240,7 @@ export function classifyJourney(input: ClassifyInput): JourneyAssessment {
       actualDeparture: null,
       actualArrival: null,
       delayMinutes: null,
+      lastRecordedCall: null,
       outcome: 'service-not-found',
       evidence: 'none',
       looksClaimable: false,
@@ -216,6 +285,41 @@ export function classifyJourney(input: ClassifyInput): JourneyAssessment {
   // cancellations directly - this absence is the strongest signal there is, and
   // cancellations are a large share of real claims.
   if (scheduledArrivalMinutes !== null && actualArrivalMinutes === null) {
+    // Before calling this a probable cancellation, look at where the train
+    // actually got to. A service that ran most of the route and then stopped
+    // short is not a cancellation, and the difference is the difference between
+    // a user being told "probably cancelled" and being told how late the train
+    // that abandoned them was.
+    const lastSeen = lastRecordedCall(leg.between);
+
+    if (lastSeen !== null) {
+      notes.push(
+        `This service ran but never called at ${to}. It was last recorded at ` +
+          `${lastSeen.location} at ${formatClockTime(lastSeen.time)}` +
+          (lastSeen.minutesLate === null
+            ? '.'
+            : `, ${describeLateness(lastSeen.minutesLate)} there.`),
+      );
+      notes.push(
+        `That figure is the delay at ${lastSeen.location}, not at ${to}. Your own ` +
+          'delay depends on how you completed the journey, which the performance ' +
+          'data cannot see - so work it out from when you actually arrived.',
+      );
+      notes.push(...reasonCodeNotes(reasonCode));
+      return {
+        ...shared,
+        delayMinutes: null,
+        lastRecordedCall: lastSeen,
+        outcome: 'did-not-call',
+        // The absent arrival is still an inference, but one made against
+        // recorded times rather than against silence.
+        evidence: 'inferred-from-absent-times',
+        looksClaimable: true,
+        needsManualCheck: true,
+        notes,
+      };
+    }
+
     const neverDeparted = parseClockTime(origin.actualDeparture) === null;
     notes.push(
       'No arrival was recorded for this service. The performance data does not ' +
@@ -223,15 +327,11 @@ export function classifyJourney(input: ClassifyInput): JourneyAssessment {
         'there is' +
         (neverDeparted ? ', and no departure was recorded either.' : '.'),
     );
-    if (reasonCode === AMBIGUOUS_REASON_CODE) {
-      notes.push(
-        `Reason code ${AMBIGUOUS_REASON_CODE} was recorded, which is used for both ` +
-          'delays and cancellations and so does not settle which happened.',
-      );
-    }
+    notes.push(...reasonCodeNotes(reasonCode));
     return {
       ...shared,
       delayMinutes: null,
+      lastRecordedCall: null,
       outcome: 'arrival-not-recorded',
       evidence: 'inferred-from-absent-times',
       looksClaimable: true,
@@ -249,6 +349,7 @@ export function classifyJourney(input: ClassifyInput): JourneyAssessment {
     return {
       ...shared,
       delayMinutes: null,
+      lastRecordedCall: null,
       outcome: 'service-not-found',
       evidence: 'none',
       looksClaimable: false,
@@ -271,6 +372,7 @@ export function classifyJourney(input: ClassifyInput): JourneyAssessment {
   return {
     ...shared,
     delayMinutes,
+    lastRecordedCall: null,
     outcome: delayed ? 'delayed' : 'within-threshold',
     evidence: 'recorded-times',
     looksClaimable: delayed,

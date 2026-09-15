@@ -333,3 +333,90 @@ describe('thresholds', () => {
     expect(result.notes.join(' ')).not.toContain('has not been confirmed');
   });
 });
+
+describe('a service that ran but abandoned the journey', () => {
+  // Modelled on the real 18:35 London Bridge to Hassocks of 2026-09-03: it ran
+  // the length of the route, fell 41 minutes down by Haywards Heath, then
+  // terminated there and never called at Hassocks. Read only at its endpoints
+  // this is indistinguishable from a cancellation, and was reported as one.
+  const terminatedShort = record(
+    [
+      call('LBG', { scheduledDeparture: '1835', actualDeparture: '1834', scheduledArrival: '1834', actualArrival: '1832' }),
+      call('GTW', { scheduledArrival: '1904', actualArrival: '1939', scheduledDeparture: '1905', actualDeparture: '1941' }),
+      call('HHE', { scheduledArrival: '1921', actualArrival: '2002' }),
+      call('HSK', { scheduledArrival: '1932', lateCancReason: '911' }),
+    ],
+    { date: '2026-09-03', tocCode: 'TL' },
+  );
+
+  const assessment = classify(terminatedShort, {
+    from: 'LBG',
+    to: 'HSK',
+    date: '2026-09-03',
+  });
+
+  it('does not call it a probable cancellation', () => {
+    expect(assessment.outcome).toBe('did-not-call');
+    expect(assessment.notes.join(' ')).not.toContain('cancelled');
+  });
+
+  it('reports where the train actually got to, and how late it was there', () => {
+    expect(assessment.lastRecordedCall).toEqual({
+      location: 'HHE',
+      time: '2002',
+      minutesLate: 41,
+    });
+  });
+
+  it('keeps that figure out of delayMinutes, which is the delay at the destination', () => {
+    // 41 minutes is how late it was somewhere the user was not going. Putting
+    // it in delayMinutes would score the journey against a delay it never had.
+    expect(assessment.delayMinutes).toBeNull();
+  });
+
+  it('says plainly that the figure is not the delay for this journey', () => {
+    expect(assessment.notes.join(' ')).toContain('not at HSK');
+  });
+
+  it('still surfaces it as a candidate', () => {
+    expect(assessment.looksClaimable).toBe(true);
+    expect(assessment.needsManualCheck).toBe(true);
+  });
+
+  it('hands over a reason code it cannot interpret rather than dropping it', () => {
+    expect(assessment.notes.join(' ')).toContain('911');
+  });
+
+  it('still reads a genuine cancellation as one', () => {
+    // No recorded time anywhere on the route: nothing ran, and there is no
+    // late-running to report. This must not become a "did not call".
+    const nothingRan = record(
+      [
+        call('LBG', { scheduledDeparture: '1835', scheduledArrival: '1834' }),
+        call('HHE', { scheduledArrival: '1921' }),
+        call('HSK', { scheduledArrival: '1932' }),
+      ],
+      { date: '2026-09-07', tocCode: 'TL' },
+    );
+    const cancelled = classify(nothingRan, { from: 'LBG', to: 'HSK', date: '2026-09-07' });
+
+    expect(cancelled.outcome).toBe('arrival-not-recorded');
+    expect(cancelled.lastRecordedCall).toBeNull();
+    expect(cancelled.looksClaimable).toBe(true);
+  });
+
+  it('measures lateness from the departure when only a departure was recorded', () => {
+    const departedOnly = record(
+      [
+        call('LBG', { scheduledDeparture: '1835', actualDeparture: '1834', scheduledArrival: '1834' }),
+        call('HHE', { scheduledDeparture: '1922', actualDeparture: '1950' }),
+        call('HSK', { scheduledArrival: '1932' }),
+      ],
+      { date: '2026-09-03', tocCode: 'TL' },
+    );
+    const result = classify(departedOnly, { from: 'LBG', to: 'HSK', date: '2026-09-03' });
+
+    expect(result.outcome).toBe('did-not-call');
+    expect(result.lastRecordedCall).toEqual({ location: 'HHE', time: '1950', minutesLate: 28 });
+  });
+});

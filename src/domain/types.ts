@@ -34,10 +34,38 @@ export type JourneyOutcome =
   | 'delayed'
   /** Scheduled to arrive, no arrival recorded. Often a cancellation. */
   | 'arrival-not-recorded'
+  /**
+   * The service demonstrably ran past the origin, but never called at the
+   * destination - terminated short, diverted, or run fast through it.
+   *
+   * Distinct from 'arrival-not-recorded' because the record says something
+   * quite different: not "we cannot tell what happened to this train" but "this
+   * train ran, we can see how late it was, and it did not take you where you
+   * were going". Collapsing the two throws away the evidence for the stronger
+   * claim of the pair.
+   */
+  | 'did-not-call'
   /** No matching service in HSP at all. */
   | 'service-not-found'
   /** Too recent for the data to be in yet. Nothing to conclude either way. */
   | 'awaiting-data';
+
+/**
+ * The last place a service was actually recorded before it stopped serving the
+ * journey. Only meaningful on a 'did-not-call' outcome.
+ *
+ * `minutesLate` is how late it was *there*, at a station the user was not
+ * travelling to. It is deliberately kept out of `delayMinutes`: the delay that
+ * decides a claim is the one at the destination, and this is not it.
+ */
+export interface LastRecordedCall {
+  /** CRS code of the last station with a recorded time. */
+  readonly location: string;
+  /** "HHMM" recorded there. */
+  readonly time: string;
+  /** Minutes late at that station, or null if it could not be measured. */
+  readonly minutesLate: number | null;
+}
 
 export type Evidence =
   /** Both scheduled and actual times were present. */
@@ -62,6 +90,12 @@ export interface JourneyAssessment {
 
   /** Minutes late at the destination. Null when no arrival was recorded. */
   readonly delayMinutes: number | null;
+
+  /**
+   * Where the service was last seen, when it never reached the destination.
+   * Null on every other outcome.
+   */
+  readonly lastRecordedCall: LastRecordedCall | null;
 
   readonly outcome: JourneyOutcome;
   readonly evidence: Evidence;

@@ -35,7 +35,9 @@ export type JourneyOutcome =
   /** Scheduled to arrive, no arrival recorded. Often a cancellation. */
   | 'arrival-not-recorded'
   /** No matching service in HSP at all. */
-  | 'service-not-found';
+  | 'service-not-found'
+  /** Too recent for the data to be in yet. Nothing to conclude either way. */
+  | 'awaiting-data';
 
 export type Evidence =
   /** Both scheduled and actual times were present. */

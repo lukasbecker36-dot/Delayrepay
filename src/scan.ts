@@ -20,6 +20,15 @@ import { mapWithConcurrency } from './util/concurrency.js';
 /** HSP is a free service. Ask for a handful of things at a time, not hundreds. */
 const DETAIL_CONCURRENCY = 4;
 
+/**
+ * How far back the data is treated as still arriving.
+ *
+ * HSP lags the railway: today's trains may not have run, and the last day or
+ * two may not have been written up. Inside this window an absent service means
+ * "not yet", not "this train did not run", and the two must never be confused.
+ */
+export const DATA_SETTLING_DAYS = 2;
+
 export interface ScanRequest {
   /** Origin CRS code. */
   readonly from: string;
@@ -202,6 +211,7 @@ function classifyFor(
     to: request.to,
     date,
     today: request.today,
+    dataMayBeIncomplete: daysBetween(date, request.today) < DATA_SETTLING_DAYS,
     ...(request.thresholdMinutes == null ? {} : { thresholdMinutes: request.thresholdMinutes }),
   });
 }

@@ -31,6 +31,12 @@ export interface ClassifyInput {
   readonly today: string;
   /** Threshold in minutes, overriding the operator's. */
   readonly thresholdMinutes?: number | null;
+  /**
+   * True when this date is recent enough that HSP may simply not have the data
+   * yet. An absent service then means nothing, and must not be reported as a
+   * train that vanished.
+   */
+  readonly dataMayBeIncomplete?: boolean;
 }
 
 interface LegCalls {
@@ -97,6 +103,33 @@ export function classifyJourney(input: ClassifyInput): JourneyAssessment {
     thresholdConfirmed: threshold.confirmed,
     claimWindow,
   } as const;
+
+  // Nothing found, and the date is too recent to read anything into that. The
+  // train may not have run yet, and the data lags the railway by a day or so.
+  // "We cannot see this service" would be a claim about the railway; the truth
+  // is only that we cannot see it yet.
+  if (record === null && input.dataMayBeIncomplete === true) {
+    notes.push(
+      'This journey is too recent for the performance data to have caught up. ' +
+        'Check again in a day or two.',
+    );
+    return {
+      ...base,
+      scheduledDeparture: null,
+      scheduledArrival: null,
+      actualDeparture: null,
+      actualArrival: null,
+      delayMinutes: null,
+      outcome: 'awaiting-data',
+      evidence: 'none',
+      looksClaimable: false,
+      needsManualCheck: false,
+      rid: null,
+      tocCode: null,
+      reasonCode: null,
+      notes,
+    };
+  }
 
   // HSP never saw this service. That is not the same as the train running
   // fine: a service struck from the day's plan, as happens during industrial

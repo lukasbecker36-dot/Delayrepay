@@ -34,8 +34,10 @@ export interface Operator {
   readonly minimumDelayMinutes: number | null;
   /** The operator's own Delay Repay claim page. Null until confirmed. */
   readonly claimUrl: string | null;
-  /** YYYY-MM-DD the two fields above were last checked at source. */
+  /** YYYY-MM-DD the two fields above were last checked. */
   readonly policyLastConfirmed: string | null;
+  /** Where they were checked, so the next person can recheck them. */
+  readonly policySource: string | null;
 }
 
 function pending(code: string, name: string): Operator {
@@ -45,6 +47,7 @@ function pending(code: string, name: string): Operator {
     minimumDelayMinutes: null,
     claimUrl: null,
     policyLastConfirmed: null,
+    policySource: null,
   };
 }
 
@@ -69,7 +72,17 @@ const OPERATOR_LIST: readonly Operator[] = [
   pending('SN', 'Southern'),
   pending('SR', 'ScotRail'),
   pending('SW', 'South Western Railway'),
-  pending('TL', 'Thameslink'),
+  {
+    code: 'TL',
+    name: 'Thameslink',
+    // Delay Repay 15: pays from 15 minutes. Recorded 2026-09-15 from
+    // Thameslink's published Delay Repay terms, which also state the 28-day
+    // claim deadline this tool is built around.
+    minimumDelayMinutes: 15,
+    claimUrl: 'https://delayrepay.thameslinkrailway.com/',
+    policyLastConfirmed: '2026-09-15',
+    policySource: 'https://www.thameslinkrailway.com/help-and-support/delay-repay',
+  },
   pending('TP', 'TransPennine Express'),
   pending('VT', 'Avanti West Coast'),
   pending('XC', 'CrossCountry'),

@@ -167,6 +167,65 @@ describe('a service HSP never saw', () => {
   });
 });
 
+describe('a journey too recent for the data to have arrived', () => {
+  it('says the data has not caught up, rather than that the train vanished', () => {
+    const result = classifyJourney({
+      record: null,
+      from: 'BTN',
+      to: 'VIC',
+      date: '2026-09-15',
+      today: '2026-09-15',
+      dataMayBeIncomplete: true,
+    });
+    expect(result.outcome).toBe('awaiting-data');
+    expect(result.notes.join(' ')).toContain('too recent');
+    expect(result.notes.join(' ')).not.toContain('industrial action');
+  });
+
+  it('asks nothing of the user, because there is nothing yet to check', () => {
+    const result = classifyJourney({
+      record: null,
+      from: 'BTN',
+      to: 'VIC',
+      date: '2026-09-15',
+      today: '2026-09-15',
+      dataMayBeIncomplete: true,
+    });
+    expect(result.looksClaimable).toBe(false);
+    expect(result.needsManualCheck).toBe(false);
+  });
+
+  it('still reports a service that is there, recent or not', () => {
+    const late = record([
+      call('BTN', { scheduledDeparture: '0715', actualDeparture: '0718' }),
+      call('VIC', { scheduledArrival: '0817', actualArrival: '0851' }),
+    ]);
+    const result = classifyJourney({
+      record: late,
+      from: 'BTN',
+      to: 'VIC',
+      date: '2026-09-08',
+      today: TODAY,
+      dataMayBeIncomplete: true,
+      thresholdMinutes: 15,
+    });
+    expect(result.outcome).toBe('delayed');
+  });
+
+  it('falls back to a plain not-found once the data has had time to arrive', () => {
+    const result = classifyJourney({
+      record: null,
+      from: 'BTN',
+      to: 'VIC',
+      date: '2026-09-08',
+      today: TODAY,
+      dataMayBeIncomplete: false,
+    });
+    expect(result.outcome).toBe('service-not-found');
+    expect(result.needsManualCheck).toBe(true);
+  });
+});
+
 describe('picking the right leg', () => {
   it('ignores intermediate stations', () => {
     const viaHaywardsHeath = record([

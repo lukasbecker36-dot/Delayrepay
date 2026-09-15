@@ -33,6 +33,8 @@ export function describeOutcome(assessment: JourneyAssessment): string {
       );
     case 'service-not-found':
       return 'This service could not be found in the performance data.';
+    case 'awaiting-data':
+      return 'Too recent to check - the performance data has not caught up yet.';
   }
 }
 
@@ -69,6 +71,7 @@ export function describeWhereToClaim(assessment: JourneyAssessment): string {
 export function summariseScan(assessments: readonly JourneyAssessment[]): string {
   const claimable = assessments.filter((a) => a.looksClaimable);
   const unchecked = assessments.filter((a) => !a.looksClaimable && a.needsManualCheck);
+  const tooRecent = assessments.filter((a) => a.outcome === 'awaiting-data');
 
   const parts: string[] = [];
 
@@ -91,6 +94,13 @@ export function summariseScan(assessments: readonly JourneyAssessment[]): string
     parts.push(
       `${unchecked.length} ${unchecked.length === 1 ? 'journey' : 'journeys'} could not ` +
         'be checked against the performance data. Those are worth a look yourself.',
+    );
+  }
+
+  if (tooRecent.length > 0) {
+    parts.push(
+      `${tooRecent.length} ${tooRecent.length === 1 ? 'journey is' : 'journeys are'} too ` +
+        'recent to check yet. Try again in a day or two - there is still time on those.',
     );
   }
 

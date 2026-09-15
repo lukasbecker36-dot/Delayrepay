@@ -42,15 +42,29 @@ const ON_TIME = assess([
   call('VIC', { scheduledArrival: '0817', actualArrival: '0819' }),
 ]);
 const NOT_FOUND = assess(null);
+const AWAITING = classifyJourney({
+  record: null,
+  from: 'BTN',
+  to: 'VIC',
+  date: TODAY,
+  today: TODAY,
+  dataMayBeIncomplete: true,
+});
 
-const EVERY_OUTCOME = [DELAYED, CANCELLED, ON_TIME, NOT_FOUND];
+const EVERY_OUTCOME = [DELAYED, CANCELLED, ON_TIME, NOT_FOUND, AWAITING];
 
 describe('the words the tool is allowed to use', () => {
   it('covers every outcome the classifier can produce', () => {
     // If a new outcome is added, this test must be updated before the guard
     // below can claim to have checked it.
     expect(new Set(EVERY_OUTCOME.map((a) => a.outcome))).toEqual(
-      new Set(['delayed', 'arrival-not-recorded', 'within-threshold', 'service-not-found']),
+      new Set([
+        'delayed',
+        'arrival-not-recorded',
+        'within-threshold',
+        'service-not-found',
+        'awaiting-data',
+      ]),
     );
   });
 
@@ -125,6 +139,14 @@ describe('summariseScan', () => {
     const summary = summariseScan(EVERY_OUTCOME);
     expect(summary).toContain('2 journeys look claimable');
     expect(summary).toContain('could not be checked');
+    expect(summary).toContain('too recent to check yet');
+  });
+
+  it('counts a too-recent journey apart from one it genuinely could not check', () => {
+    // Conflating the two would tell the user to go and check something that
+    // has not happened yet.
+    expect(summariseScan([AWAITING])).not.toContain('could not be checked');
+    expect(summariseScan([NOT_FOUND])).not.toContain('too recent');
   });
 
   it('leads with whichever candidate expires first', () => {

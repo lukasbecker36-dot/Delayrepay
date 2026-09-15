@@ -180,6 +180,31 @@ describe('a scan over a working week', () => {
   });
 });
 
+describe('the most recent days', () => {
+  it('does not report a missing train for a date the data has not reached', async () => {
+    // Running this for real on 2026-09-15 reported today's train as one the
+    // data had never seen. It had simply not run yet.
+    const upToToday: ScanRequest = { ...REQUEST, fromDate: '2026-09-14', toDate: TODAY };
+    const fake = fakeClient({ metrics: [service([])], details: {} });
+
+    const result = await runScan(fake.client, upToToday);
+    const byDate = Object.fromEntries(result.assessments.map((a) => [a.date, a]));
+
+    expect(byDate[TODAY]?.outcome).toBe('awaiting-data');
+    expect(byDate[TODAY]?.needsManualCheck).toBe(false);
+    expect(byDate['2026-09-14']?.outcome).toBe('awaiting-data');
+  });
+
+  it('still reports a genuinely missing train once the data has had time', async () => {
+    const fake = fakeClient({ metrics: [service([])], details: {} });
+    const result = await runScan(fake.client, REQUEST);
+    const byDate = Object.fromEntries(result.assessments.map((a) => [a.date, a]));
+
+    expect(byDate['2026-09-07']?.outcome).toBe('service-not-found');
+    expect(byDate['2026-09-11']?.outcome).toBe('service-not-found');
+  });
+});
+
 describe('when HSP is having a bad day', () => {
   it('keeps the request intact when the first call fails, so nothing is retyped', async () => {
     const failing = fakeClient({ metricsError: new HspError('unavailable', 'down') });

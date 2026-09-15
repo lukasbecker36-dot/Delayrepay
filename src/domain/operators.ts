@@ -75,12 +75,29 @@ const OPERATOR_LIST: readonly Operator[] = [
   {
     code: 'TL',
     name: 'Thameslink',
-    // Delay Repay 15: pays from 15 minutes. Recorded 2026-09-15 from
-    // Thameslink's published Delay Repay terms, which also state the 28-day
-    // claim deadline this tool is built around.
-    minimumDelayMinutes: 15,
-    claimUrl: 'https://delayrepay.thameslinkrailway.com/',
-    policyLastConfirmed: '2026-09-15',
+    // Held as unconfirmed on purpose.
+    //
+    // This entry previously carried minimumDelayMinutes: 15 and a
+    // policyLastConfirmed date, which together asserted that the figure had
+    // been read from the operator's published terms. It had not been - it came
+    // from search-result summaries. The date made an unchecked number look
+    // checked, which is the one thing the fields exist to prevent.
+    //
+    // 15 is probably right: Thameslink is a GTR brand and GTR brands run
+    // "Delay Repay 15". Probably right is not confirmed, and this is the number
+    // every journey on the route is scored against - so it stays null until
+    // someone loads policySource and reads it. Scoring is unaffected either
+    // way, since DEFAULT_MINIMUM_DELAY_MINUTES is also 15; what changes is that
+    // results now say the threshold was assumed rather than confirmed.
+    //
+    // Not verifiable from this environment: the egress allowlist covers
+    // hsp-prod.rockshore.net but not thameslinkrailway.com.
+    minimumDelayMinutes: null,
+    // Same provenance, so same treatment. A wrong claim link in a product whose
+    // value is trustworthiness is worse than no link at all; the result copy
+    // falls back to naming the operator without one.
+    claimUrl: null,
+    policyLastConfirmed: null,
     policySource: 'https://www.thameslinkrailway.com/help-and-support/delay-repay',
   },
   pending('TP', 'TransPennine Express'),

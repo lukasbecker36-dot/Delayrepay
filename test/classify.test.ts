@@ -420,3 +420,87 @@ describe('a service that ran but abandoned the journey', () => {
     expect(result.lastRecordedCall).toEqual({ location: 'HHE', time: '1950', minutesLate: 28 });
   });
 });
+
+describe('a stopped-short journey once the connection is known', () => {
+  const terminatedShort = record(
+    [
+      call('LBG', { scheduledDeparture: '1835', actualDeparture: '1834', scheduledArrival: '1834' }),
+      call('HHE', { scheduledArrival: '1921', actualArrival: '2002' }),
+      call('HSK', { scheduledArrival: '1932', lateCancReason: '911' }),
+    ],
+    { date: '2026-09-03', tocCode: 'TL' },
+  );
+
+  const onward = {
+    rid: 'onward-1',
+    from: 'HHE',
+    to: 'HSK',
+    departed: '2015',
+    arrived: '2025',
+    waitMinutes: 13,
+    totalDelayMinutes: 53,
+  };
+
+  const assessed = classify(terminatedShort, {
+    from: 'LBG',
+    to: 'HSK',
+    date: '2026-09-03',
+    onwardConnection: onward,
+  });
+
+  it('finally has a delay at the destination to report', () => {
+    expect(assessed.delayMinutes).toBe(53);
+    expect(assessed.outcome).toBe('did-not-call');
+  });
+
+  it('marks the figure as resting on the assumed connection', () => {
+    expect(assessed.evidence).toBe('assumed-onward-connection');
+    expect(assessed.onwardConnection).toEqual(onward);
+  });
+
+  it('says the assumption can only understate the delay, never overstate it', () => {
+    expect(assessed.notes.join(' ')).toContain('longer than this, never shorter');
+  });
+
+  it('scores the total against the threshold', () => {
+    expect(assessed.looksClaimable).toBe(true);
+  });
+
+  it('keeps a below-threshold total visible rather than silently clearing it', () => {
+    // The total rests on a guess about which train was caught. If that guess
+    // is what drops a journey under the threshold, it must not vanish.
+    const quick = classify(terminatedShort, {
+      from: 'LBG',
+      to: 'HSK',
+      date: '2026-09-03',
+      onwardConnection: { ...onward, arrived: '1940', totalDelayMinutes: 8 },
+    });
+
+    expect(quick.looksClaimable).toBe(false);
+    expect(quick.needsManualCheck).toBe(true);
+    expect(quick.notes.join(' ')).toContain('rests on an assumed connection');
+  });
+
+  it('still reports the journey when no connection could be found', () => {
+    const withoutConnection = classify(terminatedShort, {
+      from: 'LBG',
+      to: 'HSK',
+      date: '2026-09-03',
+    });
+
+    expect(withoutConnection.delayMinutes).toBeNull();
+    expect(withoutConnection.looksClaimable).toBe(true);
+    expect(withoutConnection.onwardConnection).toBeNull();
+  });
+
+  it('never writes "a 8-minute wait"', () => {
+    const eight = classify(terminatedShort, {
+      from: 'LBG',
+      to: 'HSK',
+      date: '2026-09-03',
+      onwardConnection: { ...onward, waitMinutes: 8 },
+    });
+    expect(eight.notes.join(' ')).toContain('an 8-minute wait');
+    expect(eight.notes.join(' ')).not.toContain('a 8-minute');
+  });
+});

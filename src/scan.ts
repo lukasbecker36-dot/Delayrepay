@@ -8,6 +8,13 @@
  */
 
 import { classifyJourney } from './domain/classify.js';
+import {
+  pickOnwardConnection,
+  LOOKBACK_MINUTES,
+  MAX_WAIT_MINUTES,
+  type OnwardConnection,
+} from './domain/onward.js';
+import { formatClockTime, parseClockTime } from './domain/time.js';
 import { summariseScan, type ScanCoverage } from './domain/copy.js';
 import { addDays, daysBetween, parseIsoDate } from './domain/window.js';
 import type { JourneyAssessment, ServiceRecord } from './domain/types.js';
@@ -19,6 +26,15 @@ import { mapWithConcurrency } from './util/concurrency.js';
 
 /** HSP is a free service. Ask for a handful of things at a time, not hundreds. */
 const DETAIL_CONCURRENCY = 4;
+
+/**
+ * Onward lookups run one at a time.
+ *
+ * Each is a fresh metrics call plus its details, and they only happen for the
+ * rare journey that was abandoned partway. Slow is fine; hammering a free
+ * service on someone else's behalf is not.
+ */
+const ONWARD_CONCURRENCY = 1;
 
 /**
  * How far back the data is treated as still arriving.
@@ -167,6 +183,8 @@ export async function runScan(
   }
 
   const assessments: JourneyAssessment[] = [];
+  /** Kept alongside each assessment so an abandoned journey can be re-scored. */
+  const sourceRecords = new Map<JourneyAssessment, ServiceRecord>();
   const skipped: string[] = [];
   for (const date of dates) {
     const onThatDate = byDate.get(date) ?? [];
@@ -185,9 +203,46 @@ export async function runScan(
     }
 
     for (const record of onThatDate) {
-      assessments.push(classifyFor(record, date, request));
+      const assessment = classifyFor(record, date, request);
+      sourceRecords.set(assessment, record);
+      assessments.push(assessment);
     }
   }
+
+  // Second pass. A journey that was abandoned partway is not finished being
+  // assessed: the delay that decides the claim is the one at the destination,
+  // and that depends on the train the user caught next. Only these journeys
+  // cost an extra lookup, and a failure here costs the connection rather than
+  // the result.
+  const resolved = await mapWithConcurrency(
+    assessments,
+    ONWARD_CONCURRENCY,
+    async (assessment) => {
+      if (assessment.outcome !== 'did-not-call') return assessment;
+      const record = sourceRecords.get(assessment);
+      if (record === undefined) return assessment;
+
+      try {
+        const onward = await findOnwardConnection(
+          client,
+          request,
+          assessment,
+          record,
+          days,
+          cache,
+        );
+        if (onward === null) return assessment;
+        return classifyFor(record, assessment.date, request, onward);
+      } catch (error) {
+        failures.push(toFailure(error, assessment.date, null));
+        // The journey still stands, just without the total. Losing the
+        // connection must never lose the flagged journey itself.
+        return assessment;
+      }
+    },
+  );
+  assessments.length = 0;
+  assessments.push(...resolved);
 
   for (const date of skipped) {
     failures.push({
@@ -223,6 +278,7 @@ function classifyFor(
   record: ServiceRecord | null,
   date: string,
   request: ScanRequest,
+  onwardConnection: OnwardConnection | null = null,
 ): JourneyAssessment {
   return classifyJourney({
     record,
@@ -231,7 +287,73 @@ function classifyFor(
     date,
     today: request.today,
     dataMayBeIncomplete: daysBetween(date, request.today) < DATA_SETTLING_DAYS,
+    onwardConnection,
     ...(request.thresholdMinutes == null ? {} : { thresholdMinutes: request.thresholdMinutes }),
+  });
+}
+
+/**
+ * Finds the train that carried the user on after their own stopped short.
+ *
+ * Classification happens twice for these journeys: once to discover that the
+ * service was abandoned and where, then - knowing which station to ask about -
+ * again with the connection supplied. Re-running the classifier is free and
+ * pure, and it keeps every sentence about the journey being decided in one
+ * place rather than patched on afterwards.
+ */
+async function findOnwardConnection(
+  client: HspClient,
+  request: ScanRequest,
+  assessment: JourneyAssessment,
+  record: ServiceRecord,
+  days: DayType,
+  cache: ResponseCache,
+): Promise<OnwardConnection | null> {
+  const setDown = assessment.lastRecordedCall;
+  const bookedArrival = assessment.scheduledArrival;
+  if (setDown === null || bookedArrival === null) return null;
+
+  const setDownMinutes = parseClockTime(setDown.time);
+  if (setDownMinutes === null) return null;
+
+  // A band that runs backwards over midnight is not something serviceMetrics
+  // can answer. Rather than send a query whose meaning we cannot predict, skip
+  // the lookup and leave the journey reported without a connection.
+  if (setDownMinutes - LOOKBACK_MINUTES < 0 || setDownMinutes + MAX_WAIT_MINUTES >= 1440) {
+    return null;
+  }
+
+  const matches = await fetchMetrics(
+    client,
+    {
+      from: setDown.location,
+      to: request.to,
+      fromDate: assessment.date,
+      toDate: assessment.date,
+      fromTime: formatClockTime(setDownMinutes - LOOKBACK_MINUTES),
+      toTime: formatClockTime(setDownMinutes + MAX_WAIT_MINUTES),
+      scheduledDeparture: null,
+      today: request.today,
+      thresholdMinutes: request.thresholdMinutes ?? null,
+    },
+    days,
+    cache,
+  );
+
+  const rids = [...new Set(matches.flatMap((match) => match.rids))].filter(
+    (rid) => rid !== record.rid,
+  );
+
+  const candidates = await mapWithConcurrency(rids, DETAIL_CONCURRENCY, async (rid) =>
+    fetchDetails(client, rid, request.today, cache),
+  );
+
+  return pickOnwardConnection({
+    candidates,
+    from: setDown.location,
+    to: request.to,
+    setDownAt: setDown.time,
+    bookedArrival,
   });
 }
 

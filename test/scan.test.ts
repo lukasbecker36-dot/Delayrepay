@@ -326,3 +326,130 @@ describe('caching', () => {
     expect(second.metricsCalls).toBe(1);
   });
 });
+
+describe('a journey that was abandoned partway', () => {
+  const ABANDONED: ServiceRecord = {
+    rid: 'r-main',
+    date: '2026-09-07',
+    tocCode: 'SN',
+    calls: [
+      {
+        location: 'BTN',
+        scheduledDeparture: '0715',
+        scheduledArrival: null,
+        actualDeparture: '0716',
+        actualArrival: null,
+        lateCancReason: null,
+      },
+      {
+        location: 'HHE',
+        scheduledDeparture: null,
+        scheduledArrival: '0740',
+        actualDeparture: null,
+        actualArrival: '0821',
+        lateCancReason: '911',
+      },
+      {
+        location: 'VIC',
+        scheduledDeparture: null,
+        scheduledArrival: '0817',
+        actualDeparture: null,
+        actualArrival: null,
+        lateCancReason: '911',
+      },
+    ],
+  };
+
+  const ONWARD: ServiceRecord = {
+    rid: 'r-onward',
+    date: '2026-09-07',
+    tocCode: 'SN',
+    calls: [
+      {
+        location: 'HHE',
+        scheduledDeparture: '0820',
+        scheduledArrival: null,
+        actualDeparture: '0835',
+        actualArrival: null,
+        lateCancReason: null,
+      },
+      {
+        location: 'VIC',
+        scheduledDeparture: null,
+        scheduledArrival: '0850',
+        actualDeparture: null,
+        actualArrival: '0905',
+        lateCancReason: null,
+      },
+    ],
+  };
+
+  /** Answers the onward query differently from the main one. */
+  function twoStageClient(options: { onwardThrows?: unknown } = {}) {
+    const queries: string[] = [];
+    const client = {
+      async serviceMetrics(query: { fromLocation: string; fromTime: string }) {
+        queries.push(`${query.fromLocation}@${query.fromTime}`);
+        if (query.fromLocation === 'HHE') {
+          if (options.onwardThrows) throw options.onwardThrows;
+          return [
+            {
+              rids: ['r-onward'],
+              originLocation: 'HHE',
+              destinationLocation: 'VIC',
+              scheduledDeparture: '0820',
+              scheduledArrival: '0850',
+              tocCode: 'SN',
+            },
+          ];
+        }
+        return [service(['r-main'])];
+      },
+      async serviceDetails(rid: string) {
+        if (rid === 'r-main') return ABANDONED;
+        if (rid === 'r-onward') return ONWARD;
+        throw new HspError('unknown', `no fixture for ${rid}`);
+      },
+    } as unknown as HspClient;
+    return { client, queries };
+  }
+
+  const request: ScanRequest = {
+    ...REQUEST,
+    fromDate: '2026-09-07',
+    toDate: '2026-09-07',
+  };
+
+  it('looks up the connection and scores the journey on the total delay', async () => {
+    const { client } = twoStageClient();
+    const result = await runScan(client, request);
+    const journey = result.assessments.find((a) => a.date === '2026-09-07');
+
+    // Booked into VIC at 0817, actually there at 0905 on the next train.
+    expect(journey?.outcome).toBe('did-not-call');
+    expect(journey?.delayMinutes).toBe(48);
+    expect(journey?.onwardConnection?.rid).toBe('r-onward');
+    expect(journey?.looksClaimable).toBe(true);
+  });
+
+  it('asks about onward trains from before the set-down, not just after it', async () => {
+    // The train someone catches is often one booked earlier and running late.
+    const { client, queries } = twoStageClient();
+    await runScan(client, request);
+
+    expect(queries.some((q) => q.startsWith('HHE@'))).toBe(true);
+    expect(queries).toContain('HHE@0751'); // 0821 set-down, less 30 minutes.
+  });
+
+  it('keeps the flagged journey when the connection lookup fails', async () => {
+    // Losing the total is a worse result. Losing the claim would be a bug.
+    const { client } = twoStageClient({ onwardThrows: new HspError('unavailable', 'down') });
+    const result = await runScan(client, request);
+    const journey = result.assessments.find((a) => a.date === '2026-09-07');
+
+    expect(journey?.outcome).toBe('did-not-call');
+    expect(journey?.looksClaimable).toBe(true);
+    expect(journey?.onwardConnection).toBeNull();
+    expect(result.failures.some((f) => f.date === '2026-09-07')).toBe(true);
+  });
+});

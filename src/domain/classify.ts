@@ -7,10 +7,11 @@
  */
 
 import { minutesLate, parseClockTime } from './time.js';
-import { describeLateness, formatClockTime } from './copy.js';
+import { articleFor, describeLateness, displayClockTime } from './copy.js';
 import { claimWindowFor } from './window.js';
 import { resolveThreshold, DEFAULT_MINIMUM_DELAY_MINUTES } from './operators.js';
 import { spansClockChange } from './clockChange.js';
+import type { OnwardConnection } from './onward.js';
 import type {
   JourneyAssessment,
   LastRecordedCall,
@@ -66,6 +67,15 @@ export interface ClassifyInput {
    * train that vanished.
    */
   readonly dataMayBeIncomplete?: boolean;
+  /**
+   * The train the user is assumed to have caught after their own stopped short.
+   *
+   * Supplied by the caller on a second pass: which onward services ran is a
+   * question for HSP, and this function stays pure. Given one, the journey can
+   * finally be scored on the delay that actually decides a claim - the one at
+   * the destination - instead of on a figure measured somewhere else.
+   */
+  readonly onwardConnection?: OnwardConnection | null;
 }
 
 interface LegCalls {
@@ -164,6 +174,10 @@ export function classifyJourney(input: ClassifyInput): JourneyAssessment {
     date,
     from,
     to,
+    // Defaults for the two fields only a stopped-short journey sets. Declared
+    // once here so a new outcome cannot forget them.
+    lastRecordedCall: null,
+    onwardConnection: null,
     operator: threshold.operator,
     thresholdMinutes: threshold.minutes,
     thresholdConfirmed: threshold.confirmed,
@@ -186,7 +200,6 @@ export function classifyJourney(input: ClassifyInput): JourneyAssessment {
       actualDeparture: null,
       actualArrival: null,
       delayMinutes: null,
-      lastRecordedCall: null,
       outcome: 'awaiting-data',
       evidence: 'none',
       looksClaimable: false,
@@ -215,7 +228,6 @@ export function classifyJourney(input: ClassifyInput): JourneyAssessment {
       actualDeparture: null,
       actualArrival: null,
       delayMinutes: null,
-      lastRecordedCall: null,
       outcome: 'service-not-found',
       evidence: 'none',
       looksClaimable: false,
@@ -240,7 +252,6 @@ export function classifyJourney(input: ClassifyInput): JourneyAssessment {
       actualDeparture: null,
       actualArrival: null,
       delayMinutes: null,
-      lastRecordedCall: null,
       outcome: 'service-not-found',
       evidence: 'none',
       looksClaimable: false,
@@ -295,11 +306,53 @@ export function classifyJourney(input: ClassifyInput): JourneyAssessment {
     if (lastSeen !== null) {
       notes.push(
         `This service ran but never called at ${to}. It was last recorded at ` +
-          `${lastSeen.location} at ${formatClockTime(lastSeen.time)}` +
+          `${lastSeen.location} at ${displayClockTime(lastSeen.time)}` +
           (lastSeen.minutesLate === null
             ? '.'
             : `, ${describeLateness(lastSeen.minutesLate)} there.`),
       );
+
+      const onward = input.onwardConnection ?? null;
+
+      if (onward !== null) {
+        notes.push(
+          `Assuming you took the next train onward - it left ${onward.from} at ` +
+            `${displayClockTime(onward.departed)} after ` +
+            `${articleFor(onward.waitMinutes)} ${onward.waitMinutes}-minute ` +
+            `wait, and reached ${to} at ${displayClockTime(onward.arrived)} - you got ` +
+            `in ${onward.totalDelayMinutes} minutes after your booked arrival.`,
+        );
+        notes.push(
+          'That rests on you catching the first train onward. If you missed it, or ' +
+            'travelled some other way, your delay was longer than this, never shorter.',
+        );
+        notes.push(...reasonCodeNotes(reasonCode));
+
+        const overThreshold = onward.totalDelayMinutes >= threshold.minutes;
+        if (!overThreshold) {
+          notes.push(
+            `That total is inside the ${threshold.minutes}-minute threshold, but it ` +
+              'rests on an assumed connection rather than on your own recorded ' +
+              'arrival. Worth checking against what you remember.',
+          );
+        }
+        return {
+          ...shared,
+          // Now a real delay at the destination, so it belongs in delayMinutes -
+          // flagged by `evidence` as resting on the connection assumption.
+          delayMinutes: onward.totalDelayMinutes,
+          lastRecordedCall: lastSeen,
+          onwardConnection: onward,
+          outcome: 'did-not-call',
+          evidence: 'assumed-onward-connection',
+          looksClaimable: overThreshold,
+          // Always. The connection is an assumption, so this never becomes a
+          // negative result the tool asserts on its own.
+          needsManualCheck: true,
+          notes,
+        };
+      }
+
       notes.push(
         `That figure is the delay at ${lastSeen.location}, not at ${to}. Your own ` +
           'delay depends on how you completed the journey, which the performance ' +
@@ -331,7 +384,6 @@ export function classifyJourney(input: ClassifyInput): JourneyAssessment {
     return {
       ...shared,
       delayMinutes: null,
-      lastRecordedCall: null,
       outcome: 'arrival-not-recorded',
       evidence: 'inferred-from-absent-times',
       looksClaimable: true,
@@ -349,7 +401,6 @@ export function classifyJourney(input: ClassifyInput): JourneyAssessment {
     return {
       ...shared,
       delayMinutes: null,
-      lastRecordedCall: null,
       outcome: 'service-not-found',
       evidence: 'none',
       looksClaimable: false,
@@ -372,7 +423,6 @@ export function classifyJourney(input: ClassifyInput): JourneyAssessment {
   return {
     ...shared,
     delayMinutes,
-    lastRecordedCall: null,
     outcome: delayed ? 'delayed' : 'within-threshold',
     evidence: 'recorded-times',
     looksClaimable: delayed,

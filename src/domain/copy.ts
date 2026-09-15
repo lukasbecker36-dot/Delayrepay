@@ -14,7 +14,7 @@ import type { JourneyAssessment } from './types.js';
 import type { ClaimWindow } from './window.js';
 
 /** "HHMM" as "HH:MM", for prose rather than for the times column. */
-export function formatClockTime(time: string): string {
+export function displayClockTime(time: string): string {
   return /^\d{4}$/.test(time) ? `${time.slice(0, 2)}:${time.slice(2)}` : time;
 }
 
@@ -31,6 +31,20 @@ export function describeLateness(minutes: number): string {
   return `${early} ${early === 1 ? 'minute' : 'minutes'} early`;
 }
 
+/**
+ * "a" or "an" for a number written as digits.
+ *
+ * Spoken aloud, 8, 11, 18 and the eighties begin with a vowel sound, so
+ * "a 8-minute wait" reads as a typo in the middle of a figure the user is
+ * being asked to trust.
+ */
+export function articleFor(value: number): string {
+  const n = Math.abs(Math.trunc(value));
+  if (n === 8 || n === 11 || n === 18) return 'an';
+  if (n >= 80 && n <= 89) return 'an';
+  return 'a';
+}
+
 /** How a journey reads in a list of results. */
 export function describeOutcome(assessment: JourneyAssessment): string {
   switch (assessment.outcome) {
@@ -45,8 +59,23 @@ export function describeOutcome(assessment: JourneyAssessment): string {
         'This looks claimable.'
       );
     case 'did-not-call': {
-      // Deliberately not phrased as a delay figure for this journey: the train
-      // never reached the destination, so there is no arrival to be late for.
+      const onward = assessment.onwardConnection;
+      if (onward !== null) {
+        // With a connection assumed there is a real arrival delay to state, so
+        // state it - while naming it as a total rather than as this train's.
+        return (
+          `This train ran but did not call at ${assessment.to}. On the next train ` +
+          `from ${onward.from} you would have got in at ` +
+          `${displayClockTime(onward.arrived)}, ` +
+          `${describeLateness(onward.totalDelayMinutes)} in total` +
+          (assessment.looksClaimable
+            ? `, at or over the ${assessment.thresholdMinutes}-minute threshold. ` +
+              'This looks claimable.'
+            : `, inside the ${assessment.thresholdMinutes}-minute threshold.`)
+        );
+      }
+      // No connection found: the train never reached the destination, so there
+      // is no arrival to be late for and no total to quote.
       const seen = assessment.lastRecordedCall;
       const where =
         seen === null

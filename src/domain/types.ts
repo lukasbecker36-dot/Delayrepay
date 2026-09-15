@@ -1,5 +1,6 @@
 import type { ClaimWindow } from './window.js';
 import type { Operator } from './operators.js';
+import type { OnwardConnection } from './onward.js';
 
 /** One call at one station, normalised from an HSP `serviceDetails` location. */
 export interface ServiceCall {
@@ -72,6 +73,11 @@ export type Evidence =
   | 'recorded-times'
   /** Conclusion drawn from times HSP did not record. */
   | 'inferred-from-absent-times'
+  /**
+   * Measured against the connection the user is assumed to have taken, rather
+   * than against a time recorded for their own journey.
+   */
+  | 'assumed-onward-connection'
   /** Nothing to go on. */
   | 'none';
 
@@ -96,6 +102,12 @@ export interface JourneyAssessment {
    * Null on every other outcome.
    */
   readonly lastRecordedCall: LastRecordedCall | null;
+
+  /**
+   * The train assumed to have carried them the rest of the way, when their own
+   * stopped short. Null whenever no assumption was made or none was found.
+   */
+  readonly onwardConnection: OnwardConnection | null;
 
   readonly outcome: JourneyOutcome;
   readonly evidence: Evidence;

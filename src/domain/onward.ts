@@ -7,11 +7,24 @@
  * one stated rule instead: they took the next train that actually departed for
  * their destination.
  *
- * That rule is an assumption, and it is deliberately the *conservative* one.
- * Picking the earliest departure yields the earliest arrival the data allows,
- * so the delay it produces is a floor. If the user missed that connection their
- * delay was longer, never shorter - the error can only ever run in the
- * direction of under-claiming, and the copy says so.
+ * That rule is very likely the scheme's own. Delay Repay is understood to
+ * assess the delay against the first train that could have completed the
+ * journey, rather than against whatever the passenger actually did - which
+ * would make this not a guess about the user at all, but the same calculation
+ * the operator performs.
+ *
+ * UNCONFIRMED, and treated as such. It has not been read from the National Rail
+ * Conditions of Travel or from an operator's published Delay Repay terms, and
+ * `thameslinkrailway.com` is not reachable from this environment. Recording a
+ * remembered rule as an established one is the mistake already made once here,
+ * with the 15-minute threshold in operators.ts. So the copy states what was
+ * measured - the first train available - and tells the user to claim on their
+ * own arrival if it was later, which is correct under either reading.
+ *
+ * If the first-available basis is confirmed, the "if you got in later" line in
+ * classify.ts can go, and these journeys stop needing a manual check. Until
+ * then, picking the earliest departure gives the earliest arrival the data
+ * allows, so the figure is a floor and any error runs toward under-claiming.
  *
  * Pure, and separate from the fetching in scan.ts, because this arithmetic is
  * the part that has to be right.

@@ -316,24 +316,24 @@ export function classifyJourney(input: ClassifyInput): JourneyAssessment {
 
       if (onward !== null) {
         notes.push(
-          `Assuming you took the next train onward - it left ${onward.from} at ` +
-            `${displayClockTime(onward.departed)} after ` +
-            `${articleFor(onward.waitMinutes)} ${onward.waitMinutes}-minute ` +
-            `wait, and reached ${to} at ${displayClockTime(onward.arrived)} - you got ` +
-            `in ${onward.totalDelayMinutes} minutes after your booked arrival.`,
+          `The first train that could have carried you on left ${onward.from} at ` +
+            `${displayClockTime(onward.departed)}, ` +
+            `${articleFor(onward.waitMinutes)} ${onward.waitMinutes}-minute wait, and ` +
+            `reached ${to} at ${displayClockTime(onward.arrived)} - ` +
+            `${onward.totalDelayMinutes} minutes after your booked arrival.`,
         );
         notes.push(
-          'That rests on you catching the first train onward. If you missed it, or ' +
-            'travelled some other way, your delay was longer than this, never shorter.',
+          `That is measured to the first train available, not to one you were asked ` +
+            'about. If you got in later than that, claim on when you actually arrived.',
         );
         notes.push(...reasonCodeNotes(reasonCode));
 
         const overThreshold = onward.totalDelayMinutes >= threshold.minutes;
         if (!overThreshold) {
           notes.push(
-            `That total is inside the ${threshold.minutes}-minute threshold, but it ` +
-              'rests on an assumed connection rather than on your own recorded ' +
-              'arrival. Worth checking against what you remember.',
+            `That total is inside the ${threshold.minutes}-minute threshold, but only ` +
+              'because a train came along promptly. Check it against what you ' +
+              'remember before writing the journey off.',
           );
         }
         return {

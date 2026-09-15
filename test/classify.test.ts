@@ -458,8 +458,12 @@ describe('a stopped-short journey once the connection is known', () => {
     expect(assessed.onwardConnection).toEqual(onward);
   });
 
-  it('says the assumption can only understate the delay, never overstate it', () => {
-    expect(assessed.notes.join(' ')).toContain('longer than this, never shorter');
+  it('names what the total was measured to, and what to do if it was worse', () => {
+    // Framed as a statement about which train was available rather than a guess
+    // about the user: what someone did afterwards does not change what ran.
+    const notes = assessed.notes.join(' ');
+    expect(notes).toContain('first train that could have carried you on');
+    expect(notes).toContain('claim on when you actually arrived');
   });
 
   it('scores the total against the threshold', () => {
@@ -478,7 +482,7 @@ describe('a stopped-short journey once the connection is known', () => {
 
     expect(quick.looksClaimable).toBe(false);
     expect(quick.needsManualCheck).toBe(true);
-    expect(quick.notes.join(' ')).toContain('rests on an assumed connection');
+    expect(quick.notes.join(' ')).toContain('only because a train came along promptly');
   });
 
   it('still reports the journey when no connection could be found', () => {

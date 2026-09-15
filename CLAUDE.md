@@ -125,12 +125,19 @@ Chase it rather than explaining it away.
 
 ## Before charging money
 
-Two things to confirm, not assume:
+Three things to confirm, not assume:
 
 1. Rail Data Marketplace terms on commercial use of HSP data.
 2. Whether flagging claims (as opposed to submitting them) carries any
    claims-management regulatory implications. Flagging is very likely fine —
    confirm rather than hope.
+3. How a delay is assessed when the booked train terminates short and the
+   passenger completes the journey on another one. The tool measures to the
+   first train that could have carried them on, and the scheme is understood to
+   work the same way — but that has not been read from the National Rail
+   Conditions of Travel or from an operator's terms. It decides whether
+   `src/domain/onward.ts` is doing the operator's own arithmetic or merely a
+   defensible approximation of it, and the result copy differs between the two.
 
 ---
 

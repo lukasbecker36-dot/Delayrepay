@@ -123,10 +123,12 @@ hands the request back intact so the user never retypes their route.
 ## Before this is usable
 
 Thameslink (`TL`) is filled in: Delay Repay from 15 minutes, claims at
-`delayrepay.thameslinkrailway.com`. That was recorded from search results
-quoting Thameslink's own published terms — the operator's domain is blocked
-from this environment, so it has not been read at source. Worth thirty seconds
-to confirm before relying on it.
+`www.thameslinkrailway.com/delayrepay`. Both were read at source on 2026-09-16,
+from GTR's Passenger's Charter (section 14) and Thameslink's Delay Repay page.
+
+A journey whose train terminated short is measured to the first train that
+left for the destination afterwards, which is what operators check a claim
+against. See "How a delay is measured" in `CLAUDE.md`.
 
 Every other operator still has two `null` fields in
 `src/domain/operators.ts`, and the checker is honest about it rather than

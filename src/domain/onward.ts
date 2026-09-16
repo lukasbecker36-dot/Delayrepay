@@ -3,28 +3,30 @@
  *
  * A service that terminates early does not end the journey - the passenger is
  * standing on a platform partway home, and their real delay is set by whatever
- * came next. HSP cannot see which train someone boarded, so this module applies
- * one stated rule instead: they took the next train that actually departed for
- * their destination.
+ * came next. This module measures that journey to the first train that actually
+ * departed for their destination after they were set down.
  *
- * That rule is very likely the scheme's own. Delay Repay is understood to
- * assess the delay against the first train that could have completed the
- * journey, rather than against whatever the passenger actually did - which
- * would make this not a guess about the user at all, but the same calculation
- * the operator performs.
+ * That is the basis the operator checks a claim against. What the terms say,
+ * as read on 2026-09-16:
  *
- * UNCONFIRMED, and treated as such. It has not been read from the National Rail
- * Conditions of Travel or from an operator's published Delay Repay terms, and
- * `thameslinkrailway.com` is not reachable from this environment. Recording a
- * remembered rule as an established one is the mistake already made once here,
- * with the 15-minute threshold in operators.ts. So the copy states what was
- * measured - the first train available - and tells the user to claim on their
- * own arrival if it was later, which is correct under either reading.
+ * - GTR's Passenger's Charter, section 14: Delay Repay "is based on the time you
+ *   should have arrived at your destination station, not the delay to any
+ *   particular train", and "we need to know the time of the train you took if
+ *   you are delayed due to a cancellation". Claims are checked, including for
+ *   "impossible journey combinations".
+ * - South Western Railway states the check outright: operators "base their
+ *   assessment for compensation on you catching the next available train", and
+ *   passengers who could not can say so. That is another operator's page, not
+ *   Thameslink's, but it is the same national scheme.
  *
- * If the first-available basis is confirmed, the "if you got in later" line in
- * classify.ts can go, and these journeys stop needing a manual check. Until
- * then, picking the earliest departure gives the earliest arrival the data
- * allows, so the figure is a floor and any error runs toward under-claiming.
+ * So the passenger names a train, and the operator tests it against what was
+ * available. A passenger cannot raise their delay by waiting for a later train,
+ * and the product has no way to ask which train was taken anyway - so the first
+ * one available is the figure to report, not a floor under some truer one.
+ *
+ * What is still not published: how long a connection at the same station the
+ * operator allows. This module treats a train leaving the moment someone is set
+ * down as catchable.
  *
  * Pure, and separate from the fetching in scan.ts, because this arithmetic is
  * the part that has to be right.

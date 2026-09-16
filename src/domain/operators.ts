@@ -75,30 +75,22 @@ const OPERATOR_LIST: readonly Operator[] = [
   {
     code: 'TL',
     name: 'Thameslink',
-    // Held as unconfirmed on purpose.
+    // Read at source on 2026-09-16, from GTR's Passenger's Charter section 14
+    // ("if your journey is delayed by 15 minutes or more ... you're entitled to
+    // claim compensation") and the Thameslink Delay Repay page ("If you arrive
+    // 15 minutes or more late at your destination"). The claim link is the one
+    // the Charter lists for Thameslink.
     //
-    // This entry previously carried minimumDelayMinutes: 15 and a
-    // policyLastConfirmed date, which together asserted that the figure had
-    // been read from the operator's published terms. It had not been - it came
-    // from search-result summaries. The date made an unchecked number look
-    // checked, which is the one thing the fields exist to prevent.
-    //
-    // 15 is probably right: Thameslink is a GTR brand and GTR brands run
-    // "Delay Repay 15". Probably right is not confirmed, and this is the number
-    // every journey on the route is scored against - so it stays null until
-    // someone loads policySource and reads it. Scoring is unaffected either
-    // way, since DEFAULT_MINIMUM_DELAY_MINUTES is also 15; what changes is that
-    // results now say the threshold was assumed rather than confirmed.
-    //
-    // Not verifiable from this environment: the egress allowlist covers
-    // hsp-prod.rockshore.net but not thameslinkrailway.com.
-    minimumDelayMinutes: null,
-    // Same provenance, so same treatment. A wrong claim link in a product whose
-    // value is trustworthiness is worse than no link at all; the result copy
-    // falls back to naming the operator without one.
-    claimUrl: null,
-    policyLastConfirmed: null,
-    policySource: 'https://www.thameslinkrailway.com/help-and-support/delay-repay',
+    // An earlier version of this entry carried the same figures with a
+    // confirmed date when they had only come from search summaries. The date
+    // below is the real one; recheck both fields against policySource when it
+    // goes stale.
+    minimumDelayMinutes: 15,
+    claimUrl: 'https://www.thameslinkrailway.com/delayrepay',
+    policyLastConfirmed: '2026-09-16',
+    policySource:
+      'https://www.thameslinkrailway.com/-/media/gtr/files/passenger_charter.pdf ' +
+      '(section 14); https://www.thameslinkrailway.com/help-and-support/delay-repay',
   },
   pending('TP', 'TransPennine Express'),
   pending('VT', 'Avanti West Coast'),

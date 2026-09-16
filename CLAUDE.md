@@ -123,21 +123,42 @@ Chase it rather than explaining it away.
 
 ---
 
+## How a delay is measured
+
+Against the arrival time in the published timetable for the day, at the
+destination station — not the delay to any one train (National Rail Conditions
+of Travel 33.1; GTR Passenger's Charter §14).
+
+When the booked train is cancelled or terminates short, the journey is measured
+to the **first train that actually left for the destination** after the
+passenger was set down (`src/domain/onward.ts`). The terms, read 2026-09-16:
+
+- GTR's Charter asks for "the time of the train you took if you are delayed due
+  to a cancellation", and checks claims for "impossible journey combinations".
+- South Western Railway states the check outright: operators "base their
+  assessment for compensation on you catching the next available train".
+
+So the passenger names a train and the operator tests it against what was
+available. Waiting for a later train does not raise the delay.
+
+**The app never asks which train was taken.** There is no input for it, by
+design. The first available train is the figure to report, and the copy says
+so; it must not invite the user to claim on a later arrival. The only exception
+it names is a train they could not board.
+
+Still unpublished: how long an operator allows to change at the same station.
+The tool treats a train leaving the moment someone is set down as catchable.
+
+---
+
 ## Before charging money
 
-Three things to confirm, not assume:
+Two things to confirm, not assume:
 
 1. Rail Data Marketplace terms on commercial use of HSP data.
 2. Whether flagging claims (as opposed to submitting them) carries any
    claims-management regulatory implications. Flagging is very likely fine —
    confirm rather than hope.
-3. How a delay is assessed when the booked train terminates short and the
-   passenger completes the journey on another one. The tool measures to the
-   first train that could have carried them on, and the scheme is understood to
-   work the same way — but that has not been read from the National Rail
-   Conditions of Travel or from an operator's terms. It decides whether
-   `src/domain/onward.ts` is doing the operator's own arithmetic or merely a
-   defensible approximation of it, and the result copy differs between the two.
 
 ---
 

@@ -323,6 +323,22 @@ describe('thresholds', () => {
     expect(classify(late).operator?.name).toBe('Southern');
   });
 
+  it('uses Thameslink\'s confirmed threshold and claim page without the caveat', () => {
+    const late = record(
+      [
+        call('LBG', { scheduledDeparture: '1835', actualDeparture: '1835' }),
+        call('HSK', { scheduledArrival: '1932', actualArrival: '1947' }),
+      ],
+      { tocCode: 'TL' },
+    );
+    const result = classify(late, { from: 'LBG', to: 'HSK' });
+    expect(result.thresholdMinutes).toBe(15);
+    expect(result.thresholdConfirmed).toBe(true);
+    expect(result.looksClaimable).toBe(true);
+    expect(result.operator?.claimUrl).toBe('https://www.thameslinkrailway.com/delayrepay');
+    expect(result.notes.join(' ')).not.toContain('has not been confirmed');
+  });
+
   it('an explicit override counts as confirmed and silences the caveat', () => {
     const late = record([
       call('BTN', { scheduledDeparture: '0715', actualDeparture: '0718' }),
@@ -458,12 +474,14 @@ describe('a stopped-short journey once the connection is known', () => {
     expect(assessed.onwardConnection).toEqual(onward);
   });
 
-  it('names what the total was measured to, and what to do if it was worse', () => {
-    // Framed as a statement about which train was available rather than a guess
-    // about the user: what someone did afterwards does not change what ran.
+  it('names what the total was measured to, and why that is the right train', () => {
+    // Claims are checked against the first train available, so that is the
+    // figure - not an invitation to claim on a later train someone chose.
     const notes = assessed.notes.join(' ');
     expect(notes).toContain('first train that could have carried you on');
-    expect(notes).toContain('claim on when you actually arrived');
+    expect(notes).toContain('checked against the first train you could have caught');
+    expect(notes).toContain('If you could not board it');
+    expect(notes).not.toContain('claim on when you actually arrived');
   });
 
   it('scores the total against the threshold', () => {

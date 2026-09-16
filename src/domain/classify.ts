@@ -323,8 +323,9 @@ export function classifyJourney(input: ClassifyInput): JourneyAssessment {
             `${onward.totalDelayMinutes} minutes after your booked arrival.`,
         );
         notes.push(
-          `That is measured to the first train available, not to one you were asked ` +
-            'about. If you got in later than that, claim on when you actually arrived.',
+          'Delay Repay claims are checked against the first train you could have ' +
+            'caught, so that is the train this is measured to. If you could not board ' +
+            'it - for example because it was too full - say so when you claim.',
         );
         notes.push(...reasonCodeNotes(reasonCode));
 

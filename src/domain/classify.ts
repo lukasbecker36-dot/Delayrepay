@@ -15,6 +15,7 @@ import {
   type ResolvedThreshold,
 } from './operators.js';
 import { spansClockChange } from './clockChange.js';
+import { bankHolidayNote } from './bankHolidays.js';
 import type { OnwardConnection } from './onward.js';
 import type {
   JourneyAssessment,
@@ -236,6 +237,8 @@ export function classifyJourney(input: ClassifyInput): JourneyAssessment {
         'entirely, which is what happens during industrial action. Worth checking ' +
         'yourself.',
     );
+    const holiday = bankHolidayNote(date);
+    if (holiday !== null) notes.push(holiday);
     return {
       ...base,
       scheduledDeparture: null,
@@ -260,6 +263,8 @@ export function classifyJourney(input: ClassifyInput): JourneyAssessment {
       `The matched service does not call at ${from} then ${to}, so this journey ` +
         'could not be scored. Worth checking yourself.',
     );
+    const holiday = bankHolidayNote(date);
+    if (holiday !== null) notes.push(holiday);
     return {
       ...base,
       scheduledDeparture: null,

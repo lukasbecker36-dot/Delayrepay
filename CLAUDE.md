@@ -110,6 +110,12 @@ travel. Rules:
 - Handle HSP being down or slow without losing the user's input.
 - Build the lookup logic as a testable unit separate from any UI — correctness
   here is the whole product.
+- **Bank holidays change the timetable.** A commuter's usual train may not exist
+  on one: on 31 August 2026 (England and Wales) the 07:03 from Hassocks ran as a
+  07:02. England and Wales and Scotland keep different lists - that year's
+  summer bank holiday was 31 August in one, 3 August in the other - so both are
+  checked, and a train missing on either's holiday says so. Dates come from
+  GOV.UK via `scripts/import-bank-holidays.mjs`; rerun it yearly.
 
 ### Verification
 

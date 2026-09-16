@@ -15,6 +15,7 @@ import { classifyJourney, thresholdNotes } from './classify.js';
 import { assessChange, type AssessChangeInput, type ChangeAssessment } from './connection.js';
 import { findOperator, resolveThreshold } from './operators.js';
 import { spansClockChange } from './clockChange.js';
+import { bankHolidayNote } from './bankHolidays.js';
 import { minutesLate, parseClockTime } from './time.js';
 import { articleFor, describeLateness, displayClockTime } from './copy.js';
 import type { JourneyAssessment, ServiceRecord } from './types.js';
@@ -156,6 +157,8 @@ function scoreChange(
         `this train's arrival there, so the journey could not be scored. Worth ` +
         'checking yourself.',
     );
+    const holiday = bankHolidayNote(date);
+    if (holiday !== null) notes.push(holiday);
     return {
       ...shared,
       scheduledArrival: null,

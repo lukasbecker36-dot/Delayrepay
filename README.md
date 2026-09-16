@@ -87,12 +87,14 @@ results *your* journeys rather than every service in the band.
 | `src/domain/classifyChange.ts` | Scores a journey with a change into the same result as any other. |
 | `scripts/import-change-times.mjs` | Regenerates `changeTimes.data.ts` from the feed's MSN and TSI files. Rerun at each timetable change. |
 | `src/domain/clockChange.ts` | Detects the two nights a year when clock arithmetic lies. |
+| `src/domain/bankHolidays.ts` | Bank holidays in England and Wales and in Scotland, named when a train is missing on one. |
+| `scripts/import-bank-holidays.mjs` | Regenerates `bankHolidays.data.ts` from GOV.UK. Rerun yearly, or when a one-off holiday is announced. |
 | `src/hsp/` | The HSP client, response parsing, typed failures, and the route+date cache. |
 | `src/scan.ts` | Fetch, cache, classify. Thin by design. |
 | `src/cli.ts` | The verification tool: run a real commute, check it against memory. |
 
 The domain layer has no dependency on the HSP layer, so the judgement can be
-tested without a network. 218 tests, all offline.
+tested without a network. 229 tests, all offline.
 
 ## What the checker will and will not say
 

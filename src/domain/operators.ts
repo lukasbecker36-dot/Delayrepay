@@ -69,7 +69,18 @@ const OPERATOR_LIST: readonly Operator[] = [
   pending('ME', 'Merseyrail'),
   pending('NT', 'Northern'),
   pending('SE', 'Southeastern'),
-  pending('SN', 'Southern'),
+  {
+    code: 'SN',
+    name: 'Southern',
+    // Read at source on 2026-09-16. Southern is a GTR brand and runs under the
+    // same Passenger's Charter as Thameslink: section 14 sets the 15-minute
+    // threshold for all GTR services and lists this claim page for Southern.
+    minimumDelayMinutes: 15,
+    claimUrl: 'https://www.southernrailway.com/delayrepay',
+    policyLastConfirmed: '2026-09-16',
+    policySource:
+      'https://www.thameslinkrailway.com/-/media/gtr/files/passenger_charter.pdf (section 14)',
+  },
   pending('SR', 'ScotRail'),
   pending('SW', 'South Western Railway'),
   {

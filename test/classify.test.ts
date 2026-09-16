@@ -304,10 +304,14 @@ describe('a journey on the night the clocks change', () => {
 
 describe('thresholds', () => {
   it('falls back to 15 minutes and says so when the operator is unconfirmed', () => {
-    const late = record([
-      call('BTN', { scheduledDeparture: '0715', actualDeparture: '0718' }),
-      call('VIC', { scheduledArrival: '0817', actualArrival: '0837' }),
-    ]);
+    // Great Western's terms have not been read, so it stays unconfirmed.
+    const late = record(
+      [
+        call('BTN', { scheduledDeparture: '0715', actualDeparture: '0718' }),
+        call('VIC', { scheduledArrival: '0817', actualArrival: '0837' }),
+      ],
+      { tocCode: 'GW' },
+    );
     const result = classify(late);
     expect(result.thresholdMinutes).toBe(15);
     expect(result.thresholdConfirmed).toBe(false);
@@ -455,6 +459,9 @@ describe('a stopped-short journey once the connection is known', () => {
     arrived: '2025',
     waitMinutes: 13,
     totalDelayMinutes: 53,
+    changeMinutes: 3,
+    changeTimeFromTimetable: true,
+    leftInsideChangeTime: null,
   };
 
   const assessed = classify(terminatedShort, {
@@ -524,5 +531,34 @@ describe('a stopped-short journey once the connection is known', () => {
     });
     expect(eight.notes.join(' ')).toContain('an 8-minute wait');
     expect(eight.notes.join(' ')).not.toContain('a 8-minute');
+  });
+
+  it('names the timetable change time it allowed', () => {
+    expect(assessed.notes.join(' ')).toContain("the timetable's 3-minute change time at HHE");
+  });
+
+  it('says so when the change time was a default rather than the timetable\'s', () => {
+    const defaulted = classify(terminatedShort, {
+      from: 'LBG',
+      to: 'HSK',
+      date: '2026-09-03',
+      onwardConnection: { ...onward, changeMinutes: 5, changeTimeFromTimetable: false },
+    });
+    const notes = defaulted.notes.join(' ');
+    expect(notes).toContain('5 minutes to change at HHE');
+    expect(notes).toContain('not on file');
+  });
+
+  it('mentions a train that left too soon to count, and what to do if it was caught', () => {
+    const withEarlier = classify(terminatedShort, {
+      from: 'LBG',
+      to: 'HSK',
+      date: '2026-09-03',
+      onwardConnection: { ...onward, leftInsideChangeTime: '2005' },
+    });
+    const notes = withEarlier.notes.join(' ');
+    expect(notes).toContain('A train also left at 20:05');
+    expect(notes).toContain('claim on that train instead');
+    expect(assessed.notes.join(' ')).not.toContain('A train also left');
   });
 });

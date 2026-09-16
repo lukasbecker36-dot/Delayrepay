@@ -8,6 +8,7 @@
  */
 
 import { classifyJourney } from './domain/classify.js';
+import { resolveChangeTime } from './domain/changeTimes.js';
 import {
   pickOnwardConnection,
   LOOKBACK_MINUTES,
@@ -354,6 +355,8 @@ async function findOnwardConnection(
     to: request.to,
     setDownAt: setDown.time,
     bookedArrival,
+    changeTimeFor: (departingToc) =>
+      resolveChangeTime(setDown.location, record.tocCode, departingToc),
   });
 }
 

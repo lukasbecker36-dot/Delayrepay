@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { pickOnwardConnection, MAX_WAIT_MINUTES } from '../src/domain/onward.js';
+import { DEFAULT_CHANGE_MINUTES } from '../src/domain/changeTimes.js';
 import type { ServiceCall, ServiceRecord } from '../src/domain/types.js';
 
 function call(location: string, fields: Partial<ServiceCall> = {}): ServiceCall {
@@ -35,13 +36,15 @@ function connection(
 const SET_DOWN_AT = '2002';
 const BOOKED_ARRIVAL = '1932';
 
-function pick(candidates: readonly ServiceRecord[]) {
+function pick(candidates: readonly ServiceRecord[], changeMinutes = DEFAULT_CHANGE_MINUTES) {
+  const changeTimeFor = () => ({ minutes: changeMinutes, fromTimetable: true });
   return pickOnwardConnection({
     candidates,
     from: 'HHE',
     to: 'HSK',
     setDownAt: SET_DOWN_AT,
     bookedArrival: BOOKED_ARRIVAL,
+    changeTimeFor,
   });
 }
 
@@ -79,8 +82,65 @@ describe('picking the train someone actually caught', () => {
     expect(chosen?.rid).toBe('departed-after');
   });
 
-  it('treats a train leaving at the moment of arrival as catchable', () => {
-    expect(pick([connection('a', '2000', SET_DOWN_AT, '2012')])?.waitMinutes).toBe(0);
+  it('will not count a train that left inside the change time', () => {
+    // The 2026-08-21 case: set down at Haywards Heath, and a train left three
+    // minutes later. The timetable allows five to change, so it is not a
+    // connection the operator would count - the next one is.
+    const chosen = pick([
+      connection('three-minutes', '1950', '2005', '2013'),
+      connection('next', '2010', '2018', '2027'),
+    ]);
+    expect(chosen?.rid).toBe('next');
+    expect(chosen?.changeMinutes).toBe(5);
+  });
+
+  it('still names the train that left too soon, so the result can mention it', () => {
+    const chosen = pick([
+      connection('three-minutes', '1950', '2005', '2013'),
+      connection('next', '2010', '2018', '2027'),
+    ]);
+    expect(chosen?.leftInsideChangeTime).toBe('2005');
+  });
+
+  it('reports no train inside the change time when there was none', () => {
+    expect(pick([connection('a', '1952', '2015', '2025')])?.leftInsideChangeTime).toBeNull();
+  });
+
+  it('treats a train leaving exactly at the change time as catchable', () => {
+    expect(pick([connection('a', '2000', '2007', '2017')])?.waitMinutes).toBe(5);
+  });
+
+  it('uses whatever change time the station is given', () => {
+    // A station with a longer change time rules out a train the default allows.
+    const candidates = [
+      connection('seven-minutes', '2000', '2009', '2019'),
+      connection('later', '2015', '2020', '2030'),
+    ];
+    expect(pick(candidates, 5)?.rid).toBe('seven-minutes');
+    expect(pick(candidates, 10)?.rid).toBe('later');
+  });
+
+  it('applies the change time for the operator of each train it considers', () => {
+    // At Clapham Junction the timetable allows 5 minutes from Southern to
+    // Southern but 10 in general. A 7-minute gap is a connection onto one and
+    // not onto the other.
+    const southern = { ...connection('southern', '2000', '2009', '2019'), tocCode: 'SN' };
+    const overground = { ...connection('overground', '2000', '2009', '2018'), tocCode: 'LO' };
+
+    const chosen = pickOnwardConnection({
+      candidates: [overground, southern],
+      from: 'HHE',
+      to: 'HSK',
+      setDownAt: SET_DOWN_AT,
+      bookedArrival: BOOKED_ARRIVAL,
+      changeTimeFor: (toc) => ({ minutes: toc === 'SN' ? 5 : 10, fromTimetable: true }),
+    });
+    expect(chosen?.rid).toBe('southern');
+    expect(chosen?.leftInsideChangeTime).toBe('2009');
+  });
+
+  it('returns nothing when the only train left inside the change time', () => {
+    expect(pick([connection('too-soon', '2000', SET_DOWN_AT, '2012')])).toBeNull();
   });
 
   it('gives up rather than guessing once the wait stops being plausible', () => {
@@ -122,6 +182,7 @@ describe('picking the train someone actually caught', () => {
       to: 'HSK',
       setDownAt: '2345',
       bookedArrival: '2320',
+      changeTimeFor: () => ({ minutes: DEFAULT_CHANGE_MINUTES, fromTimetable: false }),
     });
 
     expect(chosen?.waitMinutes).toBe(7);

@@ -146,8 +146,29 @@ design. The first available train is the figure to report, and the copy says
 so; it must not invite the user to claim on a later arrival. The only exception
 it names is a train they could not board.
 
-Still unpublished: how long an operator allows to change at the same station.
-The tool treats a train leaving the moment someone is set down as catchable.
+"Could have caught" means leaving at least the timetable's **minimum change
+time** after the passenger was set down. Every station has one (Haywards Heath
+3 minutes, Clapham Junction 10), and some pairs of operators have their own
+(Clapham Junction Southern to Southern: 5). They come from the RDG timetable
+feed on the National Rail Data Portal - the MSN and TSI files - via
+`scripts/import-change-times.mjs`, into `src/domain/changeTimes.data.ts`. Rerun
+the import when the timetable changes. A train that left inside the change time
+is not counted, but the result names it.
+
+### Journeys with a change (next to build)
+
+Decided 2026-09-16, for a route like Hassocks to Shepherd's Bush via Clapham
+Junction:
+
+- **The planned connection** is the first timetabled train, of any operator,
+  leaving the change station at least the change time after the planned
+  arrival there - what a journey planner would give. It sets the planned
+  arrival at the destination.
+- **After a delay**, any operator's train counts as a way onward, London
+  Overground included.
+- The delay is measured at the final destination. The operator responsible is
+  the one whose delay first broke the plan; if every connection was made, the
+  operator of the last leg.
 
 ---
 
@@ -155,7 +176,8 @@ The tool treats a train leaving the moment someone is set down as catchable.
 
 Two things to confirm, not assume:
 
-1. Rail Data Marketplace terms on commercial use of HSP data.
+1. Rail Data Marketplace terms on commercial use of HSP data, and of the RDG
+   timetable feed that the change times are generated from.
 2. Whether flagging claims (as opposed to submitting them) carries any
    claims-management regulatory implications. Flagging is very likely fine —
    confirm rather than hope.

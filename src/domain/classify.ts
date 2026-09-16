@@ -323,6 +323,20 @@ export function classifyJourney(input: ClassifyInput): JourneyAssessment {
             `${onward.totalDelayMinutes} minutes after your booked arrival.`,
         );
         notes.push(
+          onward.changeTimeFromTimetable
+            ? `That allows the timetable's ${onward.changeMinutes}-minute change time ` +
+                `at ${onward.from}.`
+            : `That allows ${onward.changeMinutes} minutes to change at ${onward.from}, ` +
+                "the usual minimum - this station's own change time is not on file.",
+        );
+        if (onward.leftInsideChangeTime !== null) {
+          notes.push(
+            `A train also left at ${displayClockTime(onward.leftInsideChangeTime)}, ` +
+              'too soon after you were set down to count as a connection. If you did ' +
+              'catch it, claim on that train instead.',
+          );
+        }
+        notes.push(
           'Delay Repay claims are checked against the first train you could have ' +
             'caught, so that is the train this is measured to. If you could not board ' +
             'it - for example because it was too full - say so when you claim.',

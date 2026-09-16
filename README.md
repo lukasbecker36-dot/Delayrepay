@@ -8,9 +8,9 @@ boundaries — they are deliberate, and the code is built to hold them.
 
 ## Status
 
-v0. The lookup core is built and tested; there is no UI. Nothing has been run
-against live HSP yet, and two pieces of operator data are deliberately blank —
-see **Before this is usable** below.
+v0. The lookup core is built and tested, and has been run against live HSP on
+the author's own commute; there is no UI yet. Most operators' Delay Repay terms
+are still deliberately blank — see **Before this is usable** below.
 
 ## Setup
 
@@ -80,13 +80,16 @@ results *your* journeys rather than every service in the band.
 | `src/domain/window.ts` | The 28-day claim window and the scan range it implies. |
 | `src/domain/copy.ts` | Every user-facing sentence, in one file so the language stays fixed. |
 | `src/domain/operators.ts` | TOC codes → operator, threshold, claim page. |
+| `src/domain/onward.ts` | The first train onward after a service stops short of the destination. |
+| `src/domain/changeTimes.ts` | Minimum change time at a station, from the timetable feed. |
+| `scripts/import-change-times.mjs` | Regenerates `changeTimes.data.ts` from the feed's MSN and TSI files. Rerun at each timetable change. |
 | `src/domain/clockChange.ts` | Detects the two nights a year when clock arithmetic lies. |
 | `src/hsp/` | The HSP client, response parsing, typed failures, and the route+date cache. |
 | `src/scan.ts` | Fetch, cache, classify. Thin by design. |
 | `src/cli.ts` | The verification tool: run a real commute, check it against memory. |
 
 The domain layer has no dependency on the HSP layer, so the judgement can be
-tested without a network. 117 tests, all offline.
+tested without a network. 183 tests, all offline.
 
 ## What the checker will and will not say
 
@@ -122,9 +125,11 @@ hands the request back intact so the user never retypes their route.
 
 ## Before this is usable
 
-Thameslink (`TL`) is filled in: Delay Repay from 15 minutes, claims at
-`www.thameslinkrailway.com/delayrepay`. Both were read at source on 2026-09-16,
-from GTR's Passenger's Charter (section 14) and Thameslink's Delay Repay page.
+Thameslink (`TL`) and Southern (`SN`) are filled in: Delay Repay from 15
+minutes, claims at `www.thameslinkrailway.com/delayrepay` and
+`www.southernrailway.com/delayrepay`. Both were read at source on 2026-09-16,
+from GTR's Passenger's Charter (section 14), which covers every GTR brand, and
+Thameslink's Delay Repay page.
 
 A journey whose train terminated short is measured to the first train that
 left for the destination afterwards, which is what operators check a claim
@@ -149,8 +154,8 @@ with the one operator on the author's route.
 
 Also outstanding, per `CLAUDE.md`, and both to confirm rather than assume before
 any money changes hands: Rail Data Marketplace terms on commercial use of HSP
-data, and whether flagging claims carries claims-management regulatory
-implications.
+data and the RDG timetable feed, and whether flagging claims carries
+claims-management regulatory implications.
 
 ## Verification
 

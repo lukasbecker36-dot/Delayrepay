@@ -24,15 +24,18 @@
  * and the product has no way to ask which train was taken anyway - so the first
  * one available is the figure to report, not a floor under some truer one.
  *
- * What is still not published: how long a connection at the same station the
- * operator allows. This module treats a train leaving the moment someone is set
- * down as catchable.
+ * "Could have caught" means leaving at least the station's minimum change time
+ * after the passenger was set down - the timetable's own test of whether a
+ * connection is possible (see changeTimes.ts). A train that left sooner is not
+ * counted, but it is reported, because it is the train an operator could point
+ * to if it disagrees.
  *
  * Pure, and separate from the fetching in scan.ts, because this arithmetic is
  * the part that has to be right.
  */
 
 import { minutesLate, parseClockTime } from './time.js';
+import type { ResolvedChangeTime } from './changeTimes.js';
 import type { ServiceRecord } from './types.js';
 
 /**
@@ -70,6 +73,15 @@ export interface OnwardConnection {
   readonly waitMinutes: number;
   /** Minutes between the booked arrival at `to` and this actual arrival. */
   readonly totalDelayMinutes: number;
+  /** The change time allowed at `from` onto this train, in minutes. */
+  readonly changeMinutes: number;
+  /** False when no timetable figure was on file and a default stood in. */
+  readonly changeTimeFromTimetable: boolean;
+  /**
+   * Recorded departure of the earliest train that left after the set-down but
+   * inside the change time, "HHMM". Not counted as catchable; null when none.
+   */
+  readonly leftInsideChangeTime: string | null;
 }
 
 export interface PickOnwardInput {
@@ -83,6 +95,14 @@ export interface PickOnwardInput {
   readonly setDownAt: string;
   /** The booked arrival at `to` on the original service, "HHMM". */
   readonly bookedArrival: string;
+  /**
+   * The change time at `from` onto a train run by `departingToc`.
+   *
+   * A function rather than a number because it can differ by train: the
+   * timetable sets some change times per pair of operators, and the candidates
+   * here need not all be run by the same one.
+   */
+  readonly changeTimeFor: (departingToc: string | null) => ResolvedChangeTime;
 }
 
 function sameStation(a: string, b: string): boolean {
@@ -101,7 +121,9 @@ export function pickOnwardConnection(input: PickOnwardInput): OnwardConnection |
   const booked = parseClockTime(input.bookedArrival);
   if (setDown === null || booked === null) return null;
 
-  let best: OnwardConnection | null = null;
+  let best: Omit<OnwardConnection, 'leftInsideChangeTime'> | null = null;
+  /** Earliest departure, in minutes waited, of a train that left too soon to catch. */
+  let tooSoon: { readonly waitMinutes: number; readonly departed: string } | null = null;
 
   for (const record of input.candidates) {
     const departureIndex = record.calls.findIndex(
@@ -126,7 +148,17 @@ export function pickOnwardConnection(input: PickOnwardInput): OnwardConnection |
     const waitMinutes = minutesLate(setDown, departed);
     if (waitMinutes < 0 || waitMinutes > MAX_WAIT_MINUTES) continue;
 
-    const candidate: OnwardConnection = {
+    // Left after they got there, but sooner than the timetable allows for a
+    // change. Not catchable - remembered only so the result can mention it.
+    const changeTime = input.changeTimeFor(record.tocCode);
+    if (waitMinutes < changeTime.minutes) {
+      if (tooSoon === null || waitMinutes < tooSoon.waitMinutes) {
+        tooSoon = { waitMinutes, departed: departureCall.actualDeparture as string };
+      }
+      continue;
+    }
+
+    const candidate = {
       rid: record.rid,
       from: departureCall.location,
       to: arrivalCall.location,
@@ -134,6 +166,8 @@ export function pickOnwardConnection(input: PickOnwardInput): OnwardConnection |
       arrived: arrivalCall.actualArrival as string,
       waitMinutes,
       totalDelayMinutes: minutesLate(booked, arrived),
+      changeMinutes: changeTime.minutes,
+      changeTimeFromTimetable: changeTime.fromTimetable,
     };
 
     // Earliest departure wins - that is the train someone standing on the
@@ -148,5 +182,6 @@ export function pickOnwardConnection(input: PickOnwardInput): OnwardConnection |
     }
   }
 
-  return best;
+  if (best === null) return null;
+  return { ...best, leftInsideChangeTime: tooSoon?.departed ?? null };
 }

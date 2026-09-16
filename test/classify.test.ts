@@ -303,20 +303,60 @@ describe('a journey on the night the clocks change', () => {
 });
 
 describe('thresholds', () => {
-  it('falls back to 15 minutes and says so when the operator is unconfirmed', () => {
-    // Great Western's terms have not been read, so it stays unconfirmed.
+  it('falls back to 15 minutes and says so for an operator it does not know', () => {
     const late = record(
       [
         call('BTN', { scheduledDeparture: '0715', actualDeparture: '0718' }),
         call('VIC', { scheduledArrival: '0817', actualArrival: '0837' }),
       ],
-      { tocCode: 'GW' },
+      { tocCode: 'ZZ' },
     );
     const result = classify(late);
     expect(result.thresholdMinutes).toBe(15);
     expect(result.thresholdConfirmed).toBe(false);
-    expect(result.notes.join(' ')).toContain('has not been confirmed');
-    expect(result.notes.join(' ')).toContain('30 minutes');
+    expect(result.notes.join(' ')).toContain('No Delay Repay threshold on file');
+  });
+
+  it('scores against a 30-minute operator\'s own threshold', () => {
+    // LNER pays from 30 minutes. A 20-minute delay is not a candidate.
+    const late = record(
+      [
+        call('BTN', { scheduledDeparture: '0715', actualDeparture: '0718' }),
+        call('VIC', { scheduledArrival: '0817', actualArrival: '0837' }),
+      ],
+      { tocCode: 'GR' },
+    );
+    const result = classify(late);
+    expect(result.thresholdMinutes).toBe(30);
+    expect(result.thresholdConfirmed).toBe(true);
+    expect(result.looksClaimable).toBe(false);
+  });
+
+  it('passes on an operator\'s caveat with every result scored against it', () => {
+    const late = record(
+      [
+        call('BTN', { scheduledDeparture: '0715', actualDeparture: '0718' }),
+        call('VIC', { scheduledArrival: '0817', actualArrival: '0857' }),
+      ],
+      { tocCode: 'LO' },
+    );
+    const notes = classify(late).notes.join(' ');
+    expect(notes).toContain("TfL's scheme");
+    expect(notes).toContain('outside its control');
+  });
+
+  it('says when a threshold came from the regulator rather than the operator', () => {
+    const late = record(
+      [
+        call('BTN', { scheduledDeparture: '0715', actualDeparture: '0718' }),
+        call('VIC', { scheduledArrival: '0817', actualArrival: '0857' }),
+      ],
+      { tocCode: 'NT' },
+    );
+    const result = classify(late);
+    expect(result.thresholdConfirmed).toBe(true);
+    expect(result.operator?.claimUrl).toBeNull();
+    expect(result.notes.join(' ')).toContain("rail regulator's");
   });
 
   it('names the operator when the TOC code is known', () => {

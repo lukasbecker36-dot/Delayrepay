@@ -77,7 +77,7 @@ const EVERY_OUTCOME = [DELAYED, CANCELLED, DID_NOT_CALL, ON_TIME, NOT_FOUND, AWA
 /**
  * Journeys with a change, one per distinct way the connection can go, so their
  * sentences pass the same guard. Brighton to Kensington Olympia via Clapham
- * Junction; the connection is London Overground unless said otherwise.
+ * Junction, all on Southern so every outcome is reachable at one threshold.
  */
 function withChange(
   firstArrival: string | null,
@@ -95,10 +95,10 @@ function withChange(
   });
   const records = [onward('late', 'SN', '0838', '0849', '0838', '0849')];
   if (connection !== null) {
-    records.push(onward('planned', 'LO', '0811', '0822', connection.departed, connection.arrived));
+    records.push(onward('planned', 'SN', '0811', '0822', connection.departed, connection.arrived));
   }
   const timetable = [
-    { tocCode: 'LO', scheduledDeparture: '0811', scheduledArrival: '0822' },
+    { tocCode: 'SN', scheduledDeparture: '0811', scheduledArrival: '0822' },
     { tocCode: 'SN', scheduledDeparture: '0838', scheduledArrival: '0849' },
     ...(missingOnOtherDays ? [{ tocCode: 'LO', scheduledDeparture: '0826', scheduledArrival: '0837' }] : []),
   ];

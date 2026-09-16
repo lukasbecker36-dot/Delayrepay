@@ -52,9 +52,14 @@ function reasonCodeNotes(reasonCode: string | null): readonly string[] {
 }
 
 
-/** The caveat owed when a threshold was assumed rather than read from the operator's terms. */
+/**
+ * What a user must be told about the threshold: that it was assumed, or the
+ * operator's own caveat when it was not.
+ */
 export function thresholdNotes(threshold: ResolvedThreshold): readonly string[] {
-  if (threshold.confirmed) return [];
+  if (threshold.confirmed) {
+    return threshold.operator?.caveat ? [threshold.operator.caveat] : [];
+  }
   return [
     threshold.operator
       ? `${threshold.operator.name}'s Delay Repay threshold has not been confirmed, ` +

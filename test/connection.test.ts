@@ -254,16 +254,26 @@ describe('scoring a journey with a change', () => {
   });
 
   it('scores a late connection against the connection\'s operator, with its caveat', () => {
-    const result = classify(firstTrain('0752'), [ran(LO_0758), ran(LO_0811, '0825', '0840'), ran(SN_0838)]);
+    // The 08:11 left at 08:45 and got in at 09:00: 36 minutes, over TfL's 30.
+    // Southern's 08:38 was later still, so the Overground is the train caught.
+    const result = classify(firstTrain('0752'), [ran(LO_0758), ran(LO_0811, '0845', '0900'), ran(SN_0838, '0850', '0904')]);
     expect(result.looksClaimable).toBe(true);
     expect(result.operator?.name).toBe('London Overground');
+    expect(result.thresholdMinutes).toBe(31);
     expect(result.evidence).toBe('recorded-times');
     expect(result.needsManualCheck).toBe(false);
 
     const notes = result.notes.join(' ');
     expect(notes).toContain('You would have made that connection');
     expect(notes).toContain('happened on the connection, run by London Overground');
-    expect(notes).toContain("London Overground's Delay Repay threshold has not been confirmed");
+    expect(notes).toContain("TfL's scheme");
+  });
+
+  it('holds a late connection to its own operator\'s threshold, not the first train\'s', () => {
+    // 16 minutes late on the Overground: over Southern's 15, not over TfL's 30.
+    const result = classify(firstTrain('0752'), [ran(LO_0758), ran(LO_0811, '0825', '0840'), ran(SN_0838)]);
+    expect(result.delayMinutes).toBe(16);
+    expect(result.looksClaimable).toBe(false);
   });
 
   it('keeps an on-time journey quiet apart from the plan it checked', () => {
@@ -284,12 +294,15 @@ describe('scoring a journey with a change', () => {
   });
 
   it('will not call a journey claimable when the gaps in the data could undo it', () => {
-    const result = classify(firstTrain('0752'), [ran(LO_0758), ran(SN_0838)]);
+    // A Southern connection at 07:58 is planned (5 minutes Southern to Southern)
+    // but missing from the data. On the trains recorded: the 08:38, 40 minutes late.
+    const sn0758: TimetabledConnection = { tocCode: 'SN', scheduledDeparture: '0758', scheduledArrival: '0812' };
+    const result = classify(firstTrain('0752'), [ran(SN_0838)], [sn0758, SN_0838]);
     expect(result.outcome).toBe('unconfirmed');
     expect(result.looksClaimable).toBe(false);
     expect(result.needsManualCheck).toBe(true);
     expect(describeOutcome(result)).toContain('the data is missing trains');
-    expect(result.notes.join(' ')).toContain('on time instead of 28 minutes late');
+    expect(result.notes.join(' ')).toContain('on time instead of 40 minutes late');
   });
 
   it('still calls it claimable when even the best case is over the threshold', () => {

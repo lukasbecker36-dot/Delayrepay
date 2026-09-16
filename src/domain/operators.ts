@@ -7,18 +7,19 @@
  * and a wrong claim link in a product whose entire value is trustworthiness is
  * worse than no link at all. So each carries where and when it was read.
  *
- * Read 2026-09-16/17, in this order of preference:
+ * Every threshold was read on 2026-09-16/17 from the operator's own Delay Repay
+ * page or conditions:
  *
- * 1. The operator's own Delay Repay page or conditions, where it could be
- *    fetched. Both fields come from there.
- * 2. Where the operator's site refuses automated reading (East Midlands
- *    Railway, Greater Anglia, Northern, ScotRail, CrossCountry) or its page
- *    could not be found (Grand Central, Hull Trains, Merseyrail): the Office of
- *    Rail and Road's table of each operator's scheme, in its delay compensation
- *    factsheet for rail periods 11-13 (published 25 June 2026, "as at 31 March
- *    2026"). That gives the threshold but no claim page, so `claimUrl` stays
- *    null, and `caveat` tells the user the figure came from the regulator. The
- *    ORR table agreed with every operator page that could be read directly.
+ * - fetched directly, for most operators;
+ * - from the author's own browser, for eight whose sites refuse automated
+ *   reading or whose pages could not be found - CrossCountry, East Midlands
+ *   Railway, Grand Central, Greater Anglia, Hull Trains, Merseyrail, Northern
+ *   and ScotRail. The author read each page's compensation table and copied
+ *   the claim link from it. Where the page address was not recorded, the claim
+ *   site stands as the source.
+ *
+ * All of it agreed with the Office of Rail and Road's table of each operator's
+ * scheme (ORR_FACTSHEET), which is the cross-check to reach for if a page moves.
  *
  * `caveat` carries anything else a user needs before claiming: TfL's schemes
  * only pay for delays within TfL's control, and one TOC code can cover two
@@ -94,32 +95,9 @@ function fromOperator(
   };
 }
 
+/** The regulator's table of every operator's scheme, as at 31 March 2026. */
 const ORR_FACTSHEET =
   'https://dataportal.orr.gov.uk/media/ittbwvrh/delay-compensation-claims-factsheet-2025-26-rail-periods-11-13.pdf';
-
-/**
- * Read from the Office of Rail and Road's table, because the operator's own
- * page could not be. No claim link: one that has not been read is not given.
- */
-function fromRegulator(
-  code: string,
-  name: string,
-  minimumDelayMinutes: number,
-  scheme: string,
-): Operator {
-  return {
-    code,
-    name,
-    minimumDelayMinutes,
-    claimUrl: null,
-    policyLastConfirmed: '2026-09-17',
-    policySource: `${ORR_FACTSHEET} (${scheme})`,
-    caveat:
-      `${name}'s ${minimumDelayMinutes}-minute threshold comes from the rail regulator's ` +
-      `list of compensation schemes, not from ${name}'s own site. Check their terms ` +
-      'before claiming.',
-  };
-}
 
 const TFL_REFUND_PAGE = 'https://tfl.gov.uk/fares/refunds/apply-for-a-service-delay-refund';
 const TFL_CAVEAT =
@@ -144,8 +122,26 @@ const OPERATOR_LIST: readonly Operator[] = [
   fromOperator('CH', 'Chiltern Railways', 15, 'https://www.chilternrailways.co.uk/compensation'),
   // "If your journey with Caledonian Sleeper is delayed by 30 minutes or more".
   fromOperator('CS', 'Caledonian Sleeper', 30, 'https://www.sleeper.scot/help-support/after-your-trip/'),
-  fromRegulator('EM', 'East Midlands Railway', 15, 'Delay Repay 15'),
-  fromRegulator('GC', 'Grand Central', 60, 'its own scheme, 60+ minutes'),
+  // "How is compensation calculated?": "15 to 29 minutes - 25% of the cost of
+  // your single ticket".
+  fromOperator(
+    'EM',
+    'East Midlands Railway',
+    15,
+    'https://delayrepay.eastmidlandsrailway.co.uk/',
+    'https://www.eastmidlandsrailway.co.uk/delay-repay',
+  ),
+  // "Grand Central delay compensation policy": first band "Delays of 1 to 2
+  // hours - 50% of the cost of a single ticket". Its own scheme, not Delay Repay.
+  fromOperator(
+    'GC',
+    'Grand Central',
+    60,
+    'https://compensation.grandcentralrail.com/',
+    'https://compensation.grandcentralrail.com/ (compensation policy table, read 2026-09-17)',
+    "Grand Central runs its own compensation scheme rather than Delay Repay, paying " +
+      'from a delay of one hour.',
+  ),
   // GTR, like Thameslink and Southern: "15 minutes or more".
   fromOperator('GN', 'Great Northern', 15, 'https://www.greatnorthernrail.com/help-and-support/delay-repay-compensation'),
   // "If your LNER train is delayed by more than 30 minutes", but the table
@@ -154,7 +150,15 @@ const OPERATOR_LIST: readonly Operator[] = [
   // "15 - 29 minutes 25%"; "we were unable to find a delay of 15 minutes or more".
   fromOperator('GW', 'Great Western Railway', 15, 'https://www.gwr.com/help-and-support/refunds-and-compensation/delay-repay'),
   fromOperator('GX', 'Gatwick Express', 15, 'https://www.gatwickexpress.com/help-and-support/delay-repay-compensation'),
-  fromRegulator('HT', 'Hull Trains', 30, 'Delay Repay 30'),
+  // Compensation table: "Under 30 minutes - No compensation due"; "30-59
+  // minutes - 50% of single ticket".
+  fromOperator(
+    'HT',
+    'Hull Trains',
+    30,
+    'https://delayrepay.hulltrains.co.uk/',
+    'https://delayrepay.hulltrains.co.uk/ (Delay Repay page table, read 2026-09-17)',
+  ),
   // Conditions of Carriage, for tickets bought after 20 July 2026, section 6.1:
   // "more than 30 minutes later than scheduled", but the table pays from "30 to
   // 59 minutes". Recorded as 30, the reading that does not miss a claim. No
@@ -172,7 +176,15 @@ const OPERATOR_LIST: readonly Operator[] = [
   },
   // "When your journey with us is delayed by 30 minutes or more".
   fromOperator('LD', 'Lumo', 30, 'https://www.lumo.co.uk/help/delay-repay'),
-  fromRegulator('LE', 'Greater Anglia', 15, 'Delay Repay 15'),
+  // "Length of delay at arrival station": "15 to 29 minutes - 25% of the cost of
+  // your single ticket".
+  fromOperator(
+    'LE',
+    'Greater Anglia',
+    15,
+    'https://greateranglia.delayrepaycompensation.com/',
+    'https://greateranglia.delayrepaycompensation.com/ (Delay Repay page table, read 2026-09-17)',
+  ),
   // One TOC code for both West Midlands Trains brands. The West Midlands
   // Railway page was read ("at least 15 minutes late"); London Northwestern's
   // refused automated reading, and the ORR lists the company as Delay Repay 15.
@@ -187,8 +199,27 @@ const OPERATOR_LIST: readonly Operator[] = [
   ),
   // TfL: "More than 30 minutes on London Overground and Elizabeth line services".
   fromOperator('LO', 'London Overground', 31, TFL_REFUND_PAGE, TFL_REFUND_PAGE, TFL_CAVEAT),
-  fromRegulator('ME', 'Merseyrail', 30, 'its own scheme, 30+ minutes'),
-  fromRegulator('NT', 'Northern', 15, 'Delay Repay 15'),
+  // Headed "If you are delayed on your journey by 30 minutes or more", though the
+  // text beneath says "more than half an hour". Recorded as 30, the reading that
+  // does not miss a claim.
+  fromOperator(
+    'ME',
+    'Merseyrail',
+    30,
+    'https://help.merseyrail.org/hc/en-gb/requests/new',
+    'https://www.merseyrail.org/help-support/refunds-and-compensation/refunds-day-tickets/',
+    "Merseyrail runs its own compensation scheme rather than Delay Repay. It pays in " +
+      'full for a ticket entirely on its Northern or Wirral lines, and less for a ' +
+      'journey that carries on elsewhere.',
+  ),
+  // "Length Of Delay Suffered": "15 Minutes to 29 Minutes - 25% of the ticket cost".
+  fromOperator(
+    'NT',
+    'Northern',
+    15,
+    'https://delayrepay.northernrailway.co.uk/',
+    'https://help.northernrailway.co.uk/s/article/Delay-Repay (table, read 2026-09-17)',
+  ),
   // "If you arrive 15 minutes or more late at your destination".
   fromOperator('SE', 'Southeastern', 15, 'https://www.southeasternrailway.co.uk/help/refunds-and-compensation/delay-repay-compensation'),
   {
@@ -204,7 +235,15 @@ const OPERATOR_LIST: readonly Operator[] = [
       'https://www.thameslinkrailway.com/-/media/gtr/files/passenger_charter.pdf (section 14)',
     caveat: null,
   },
-  fromRegulator('SR', 'ScotRail', 30, 'Delay Repay 30'),
+  // "Length of delay": first band "30 to 59 minutes - 50% of the cost of your
+  // single ticket".
+  fromOperator(
+    'SR',
+    'ScotRail',
+    30,
+    'https://delayrepay.scotrail.co.uk/',
+    'https://delayrepay.scotrail.co.uk/ (Delay Repay page table, read 2026-09-17)',
+  ),
   // "If you are delayed by 15 minutes or longer when you travel with us".
   fromOperator('SW', 'South Western Railway', 15, 'https://www.southwesternrailway.com/contact-and-help/delay-repay'),
   {
@@ -232,7 +271,18 @@ const OPERATOR_LIST: readonly Operator[] = [
   fromOperator('TP', 'TransPennine Express', 15, 'https://www.tpexpress.co.uk/help/delay-repay-compensation'),
   // "You can claim Delay Repay if your journey has been delayed by 15 minutes or more".
   fromOperator('VT', 'Avanti West Coast', 15, 'https://www.avantiwestcoast.co.uk/help-and-support/delay-repay'),
-  fromRegulator('XC', 'CrossCountry', 30, 'Delay Repay 30'),
+  // "How Delay Repay Works": "calculated according to the arrival time on the
+  // published timetable compared to the actual time of arrival to your
+  // destination"; first band "30-59 minutes - 50%". The claim link given was
+  // /en/make-claim, which only resolves in a browser; the claim site's start page
+  // resolves either way.
+  fromOperator(
+    'XC',
+    'CrossCountry',
+    30,
+    'https://delayrepay.crosscountrytrains.co.uk/en/',
+    'https://delayrepay.crosscountrytrains.co.uk/en/ (Delay Repay page table, read 2026-09-17)',
+  ),
   fromOperator('XR', 'Elizabeth line', 31, TFL_REFUND_PAGE, TFL_REFUND_PAGE, TFL_CAVEAT),
 ];
 

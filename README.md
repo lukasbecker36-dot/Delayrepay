@@ -131,17 +131,13 @@ hands the request back intact so the user never retypes their route.
 Every operator in `src/domain/operators.ts` has a threshold, read on
 2026-09-16/17 and stamped with where it came from:
 
-- **From the operator's own page or conditions** - threshold and claim link:
-  Avanti West Coast, c2c, Caledonian Sleeper, Chiltern, Gatwick Express, Great
-  Northern, GWR, Heathrow Express (no claim link found), LNER, Lumo,
-  Southeastern, Southern, South Western Railway, Thameslink, TransPennine
-  Express, Transport for Wales, West Midlands Railway; and TfL's page for London
-  Overground and the Elizabeth line.
-- **From the rail regulator's table of schemes**, because the operator's site
-  refused automated reading or the page could not be found - threshold only,
-  no claim link, and every result says where the figure came from: CrossCountry,
-  East Midlands Railway, Grand Central, Greater Anglia, Hull Trains, Merseyrail,
-  Northern, ScotRail.
+All of them come from the operator's own Delay Repay page or conditions, with
+a claim link, and agree with the rail regulator's table of schemes. Most were
+fetched directly. CrossCountry, East Midlands Railway, Grand Central, Greater
+Anglia, Hull Trains, Merseyrail, Northern and ScotRail refuse automated reading,
+so their pages were read in a browser and the figures and claim links copied
+in. Heathrow Express has no claim link on file; its conditions of carriage are
+the source.
 
 Thresholds are not all 15 minutes. LNER, Lumo, Hull Trains, CrossCountry,
 ScotRail, Caledonian Sleeper, Heathrow Express and Merseyrail pay from 30; Grand
@@ -149,8 +145,8 @@ Central from 60; London Overground and the Elizabeth line for more than 30, and
 only for delays TfL treats as within its control.
 
 These are facts about published policy that change without notice. Recheck them
-against `policySource`, and replace a regulator-sourced figure with the
-operator's own terms whenever those can be read.
+against `policySource`; for the eight read in a browser, that means reading them
+in a browser again.
 
 A journey whose train terminated short is measured to the first train that
 left for the destination afterwards, which is what operators check a claim

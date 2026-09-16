@@ -345,7 +345,7 @@ describe('thresholds', () => {
     expect(notes).toContain('outside its control');
   });
 
-  it('says when a threshold came from the regulator rather than the operator', () => {
+  it('links to the claim site for an operator whose page was read by hand', () => {
     const late = record(
       [
         call('BTN', { scheduledDeparture: '0715', actualDeparture: '0718' }),
@@ -354,9 +354,23 @@ describe('thresholds', () => {
       { tocCode: 'NT' },
     );
     const result = classify(late);
+    expect(result.thresholdMinutes).toBe(15);
     expect(result.thresholdConfirmed).toBe(true);
-    expect(result.operator?.claimUrl).toBeNull();
-    expect(result.notes.join(' ')).toContain("rail regulator's");
+    expect(result.operator?.claimUrl).toBe('https://delayrepay.northernrailway.co.uk/');
+  });
+
+  it('scores Grand Central against its one-hour scheme', () => {
+    const late = record(
+      [
+        call('BTN', { scheduledDeparture: '0715', actualDeparture: '0718' }),
+        call('VIC', { scheduledArrival: '0817', actualArrival: '0907' }),
+      ],
+      { tocCode: 'GC' },
+    );
+    const result = classify(late);
+    expect(result.delayMinutes).toBe(50);
+    expect(result.looksClaimable).toBe(false);
+    expect(result.notes.join(' ')).toContain('from a delay of one hour');
   });
 
   it('names the operator when the TOC code is known', () => {

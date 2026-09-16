@@ -155,8 +155,9 @@ feed on the National Rail Data Portal - the MSN and TSI files - via
 the import when the timetable changes. A train that left inside the change time
 is not counted, but the result names it.
 
-### Journeys with a change (next to build)
+### Journeys with a change
 
+`src/domain/connection.ts`, scored by `classifyChange.ts`; `--via` on the CLI.
 Decided 2026-09-16, for a route like Hassocks to Shepherd's Bush via Clapham
 Junction:
 
@@ -169,6 +170,19 @@ Junction:
 - The delay is measured at the final destination. The operator responsible is
   the one whose delay first broke the plan; if every connection was made, the
   operator of the last leg.
+- A first train that never reaches the change station is reported on its own
+  (cancelled, stopped short). Following that journey further is not built.
+
+**HSP's London Overground data has gaps, and they decide results.** Over 21
+weekdays at Clapham Junction, Southern's 07:39 was recorded every day; each
+Overground departure on 4 to 10 of them, and some recorded trains have no
+arrival. A gap can only make a delay look worse - the missing train may have
+been the way on. So the planned timetable is taken from every day in the range,
+and each result carries a best case as if every gap ran to time. Where the
+threshold falls between the recorded delay and the best case, the outcome is
+`unconfirmed`: not claimable, flagged to check. On Hassocks to Shepherd's Bush
+that is most days - an honest answer about the data, not about the trains. A
+fuller source of Overground actuals is what would change it.
 
 ---
 

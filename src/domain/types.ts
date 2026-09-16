@@ -1,6 +1,7 @@
 import type { ClaimWindow } from './window.js';
 import type { Operator } from './operators.js';
 import type { OnwardConnection } from './onward.js';
+import type { ChangeAssessment } from './connection.js';
 
 /** One call at one station, normalised from an HSP `serviceDetails` location. */
 export interface ServiceCall {
@@ -31,6 +32,12 @@ export interface ServiceRecord {
 export type JourneyOutcome =
   /** Arrived, and inside the operator's threshold. */
   | 'within-threshold'
+  /**
+   * A journey with a change whose delay the data cannot settle: over the
+   * threshold on the trains recorded, inside it if trains missing from the data
+   * ran to time. Neither claimable nor fine - the user has to check.
+   */
+  | 'unconfirmed'
   /** Arrived late by at least the threshold. */
   | 'delayed'
   /** Scheduled to arrive, no arrival recorded. Often a cancellation. */
@@ -88,6 +95,8 @@ export interface JourneyAssessment {
   readonly from: string;
   /** Destination CRS. */
   readonly to: string;
+  /** Where the journey changes trains, or null for a single train. */
+  readonly via: string | null;
 
   readonly scheduledDeparture: string | null;
   readonly scheduledArrival: string | null;
@@ -108,6 +117,14 @@ export interface JourneyAssessment {
    * stopped short. Null whenever no assumption was made or none was found.
    */
   readonly onwardConnection: OnwardConnection | null;
+
+  /**
+   * The change, on a journey that has one. Null on a single-train journey.
+   *
+   * When set, the times and delay above describe the whole journey: departure
+   * on the first train, planned and actual arrival at the final destination.
+   */
+  readonly change: ChangeAssessment | null;
 
   readonly outcome: JourneyOutcome;
   readonly evidence: Evidence;

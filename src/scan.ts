@@ -8,6 +8,8 @@
  */
 
 import { classifyJourney } from './domain/classify.js';
+import { classifyJourneyWithChange } from './domain/classifyChange.js';
+import type { TimetabledConnection } from './domain/connection.js';
 import { resolveChangeTime } from './domain/changeTimes.js';
 import {
   pickOnwardConnection,
@@ -15,7 +17,7 @@ import {
   MAX_WAIT_MINUTES,
   type OnwardConnection,
 } from './domain/onward.js';
-import { formatClockTime, parseClockTime } from './domain/time.js';
+import { formatClockTime, minutesLate, parseClockTime } from './domain/time.js';
 import { summariseScan, type ScanCoverage } from './domain/copy.js';
 import { addDays, daysBetween, parseIsoDate } from './domain/window.js';
 import type { JourneyAssessment, ServiceRecord } from './domain/types.js';
@@ -24,6 +26,29 @@ import { HspError, describeHspFailure } from './hsp/errors.js';
 import { cacheKey, isCacheable, NullCache, type ResponseCache } from './hsp/cache.js';
 import type { MatchedService } from './hsp/schema.js';
 import { mapWithConcurrency } from './util/concurrency.js';
+
+/**
+ * How far past the planned arrival at a change station to look for connections.
+ *
+ * Wide enough for a badly late first train plus the longest wait onward. A day
+ * whose first train got in later than this allows cannot be checked honestly -
+ * the trains it needed are outside what was asked for - so it is reported as a
+ * failure rather than scored against a partial list.
+ */
+const CONNECTION_HORIZON_MINUTES = 240;
+
+/** The longest change time any station sets, as headroom on the connection band. */
+const CHANGE_TIME_HEADROOM_MINUTES = 15;
+
+/**
+ * Connection lookups ask HSP for this many minutes of departures at a time.
+ *
+ * A change station is often busy, and a month of departures across a few hours
+ * there takes HSP longer to answer than the client waits: Clapham Junction to
+ * Shepherd's Bush, 07:22 to 11:52 over 28 weekdays, took 22 seconds. An hour at
+ * a time stays well inside the limit, and each hour caches on its own.
+ */
+const CONNECTION_CHUNK_MINUTES = 60;
 
 /** HSP is a free service. Ask for a handful of things at a time, not hundreds. */
 const DETAIL_CONCURRENCY = 4;
@@ -51,6 +76,12 @@ export interface ScanRequest {
   readonly from: string;
   /** Destination CRS code. */
   readonly to: string;
+  /**
+   * CRS code of the station where the journey changes trains. Absent for a
+   * single train. When set, `scheduledDeparture` and the time band describe the
+   * first train, and the connection onward is found from the timetable.
+   */
+  readonly via?: string | null;
   /** Start of range, YYYY-MM-DD, inclusive. */
   readonly fromDate: string;
   /** End of range, YYYY-MM-DD, inclusive. */
@@ -140,9 +171,12 @@ export async function runScan(
   const failures: ScanFailure[] = [];
   const dates = expectedDates(request.fromDate, request.toDate, days);
 
+  const via = request.via?.trim().toUpperCase() || null;
+
   let matches: readonly MatchedService[];
   try {
-    matches = await fetchMetrics(client, request, days, cache);
+    // With a change, the train pinned by the request runs only as far as it.
+    matches = await fetchMetrics(client, { ...request, to: via ?? request.to }, days, cache);
   } catch (error) {
     // Nothing to work with. The caller still holds the request, so the user's
     // input is not lost - they can retry without retyping it. The summary has
@@ -183,12 +217,37 @@ export async function runScan(
     else byDate.set(record.date, [record]);
   }
 
+  // A journey with a change needs the trains onward from the change station:
+  // the timetable, to know what was planned, and each day's records, to know
+  // what ran. A day whose connections could not be read is not scored - a
+  // missing train would change the answer without saying so.
+  // Whether the first trains themselves were read in full, before any
+  // connection failures are added: only that makes an absent train a finding.
+  const firstTrainsIncomplete = failures.length > 0;
+  const connections =
+    via === null ? null : await fetchConnections(client, request, via, byDate, days, cache);
+  if (connections !== null) failures.push(...connections.failures);
+
   const assessments: JourneyAssessment[] = [];
   /** Kept alongside each assessment so an abandoned journey can be re-scored. */
   const sourceRecords = new Map<JourneyAssessment, ServiceRecord>();
   const skipped: string[] = [];
   for (const date of dates) {
     const onThatDate = byDate.get(date) ?? [];
+
+    if (via !== null && connections !== null) {
+      if (connections.failedDates.has(date)) continue;
+      if (onThatDate.length === 0 && firstTrainsIncomplete) {
+        skipped.push(date);
+        continue;
+      }
+      for (const record of onThatDate.length === 0 ? [null] : onThatDate) {
+        assessments.push(
+          classifyWithChange(record, date, request, via, connections.timetable, connections.onwardByDate.get(date) ?? []),
+        );
+      }
+      continue;
+    }
 
     if (onThatDate.length === 0) {
       // Only assert a missing service when nothing went wrong fetching it.
@@ -219,7 +278,9 @@ export async function runScan(
     assessments,
     ONWARD_CONCURRENCY,
     async (assessment) => {
-      if (assessment.outcome !== 'did-not-call') return assessment;
+      // A journey with a change that stopped short of the change station is
+      // reported as it stands; following it further is not built yet.
+      if (assessment.outcome !== 'did-not-call' || assessment.via !== null) return assessment;
       const record = sourceRecords.get(assessment);
       if (record === undefined) return assessment;
 
@@ -273,6 +334,206 @@ export async function runScan(
     coverage,
     summary: summariseScan(assessments, coverage),
   };
+}
+
+function classifyWithChange(
+  record: ServiceRecord | null,
+  date: string,
+  request: ScanRequest,
+  via: string,
+  timetable: readonly TimetabledConnection[],
+  onward: readonly ServiceRecord[],
+): JourneyAssessment {
+  return classifyJourneyWithChange({
+    record,
+    from: request.from,
+    via,
+    to: request.to,
+    date,
+    today: request.today,
+    dataMayBeIncomplete: daysBetween(date, request.today) < DATA_SETTLING_DAYS,
+    timetable,
+    onward,
+    changeTimeFor: (arrivingToc, departingToc) =>
+      resolveChangeTime(via, arrivingToc, departingToc),
+    ...(request.thresholdMinutes == null ? {} : { thresholdMinutes: request.thresholdMinutes }),
+  });
+}
+
+interface Connections {
+  /** Every train seen running from the change station to the destination in the range. */
+  readonly timetable: readonly TimetabledConnection[];
+  readonly onwardByDate: ReadonlyMap<string, readonly ServiceRecord[]>;
+  /** Days whose connections could not be read, already reported in `failures`. */
+  readonly failedDates: ReadonlySet<string>;
+  readonly failures: readonly ScanFailure[];
+}
+
+/** The scheduled and recorded arrival of a first train at the change station. */
+function arrivalAt(
+  record: ServiceRecord,
+  from: string,
+  via: string,
+): { readonly scheduled: number | null; readonly actual: number | null } {
+  const same = (a: string, b: string) => a.trim().toUpperCase() === b.trim().toUpperCase();
+  const start = record.calls.findIndex((call) => same(call.location, from));
+  const arrival = start === -1 ? undefined : record.calls.slice(start + 1).find((call) => same(call.location, via));
+  return {
+    scheduled: parseClockTime(arrival?.scheduledArrival),
+    actual: parseClockTime(arrival?.actualArrival),
+  };
+}
+
+/**
+ * The date a Darwin RID belongs to, from its leading YYYYMMDD.
+ *
+ * HSP's RIDs carry the service date - 202609157107161 ran on 2026-09-15 - which
+ * lets a connection lookup fetch only the days it needs. Null when a RID does
+ * not look like that, and then it is fetched and sorted by its record instead.
+ */
+function ridDate(rid: string): string | null {
+  const match = /^(\d{4})(\d{2})(\d{2})/.exec(rid);
+  return match ? `${match[1]}-${match[2]}-${match[3]}` : null;
+}
+
+async function fetchConnections(
+  client: HspClient,
+  request: ScanRequest,
+  via: string,
+  firstTrains: ReadonlyMap<string, readonly ServiceRecord[]>,
+  days: DayType,
+  cache: ResponseCache,
+): Promise<Connections> {
+  const failures: ScanFailure[] = [];
+  const failedDates = new Set<string>();
+  const failDate = (date: string, message: string, kind = 'connection') => {
+    if (failedDates.has(date)) return;
+    failedDates.add(date);
+    failures.push({ date, rid: null, kind, message });
+  };
+
+  // When each day's first train was due in, and when it got there.
+  const arrivals = new Map<string, { scheduled: number; actual: number }>();
+  let planned: number | null = null;
+  for (const [date, records] of firstTrains) {
+    for (const record of records) {
+      const { scheduled, actual } = arrivalAt(record, request.from, via);
+      if (scheduled !== null) planned ??= scheduled;
+      if (scheduled !== null && actual !== null) arrivals.set(date, { scheduled, actual });
+    }
+  }
+  const empty: Connections = { timetable: [], onwardByDate: new Map(), failedDates, failures };
+  if (planned === null) return empty;
+
+  // One band for the whole range: from a little before the earliest arrival,
+  // for trains booked earlier and running late, to the longest wait after the
+  // latest - but never past the horizon.
+  const horizon = planned + CONNECTION_HORIZON_MINUTES;
+  const earliest = Math.min(planned, ...[...arrivals.values()].map((a) => a.actual));
+  const latest = Math.max(planned, ...[...arrivals.values()].map((a) => a.actual));
+  const fromMinutes = earliest - LOOKBACK_MINUTES;
+  const toMinutes = Math.min(
+    latest + MAX_WAIT_MINUTES + CHANGE_TIME_HEADROOM_MINUTES,
+    horizon,
+  );
+  if (fromMinutes < 0 || toMinutes >= 1440) {
+    for (const date of arrivals.keys()) {
+      failDate(date, `The connection at ${via} runs across midnight, which this check cannot follow yet.`);
+    }
+    return empty;
+  }
+
+  const matches: MatchedService[] = [];
+  try {
+    for (let start = fromMinutes; start <= toMinutes; start += CONNECTION_CHUNK_MINUTES) {
+      const end = Math.min(start + CONNECTION_CHUNK_MINUTES - 1, toMinutes);
+      matches.push(
+        ...(await fetchMetrics(
+          client,
+          {
+            ...request,
+            from: via,
+            fromTime: formatClockTime(start),
+            toTime: formatClockTime(end),
+            scheduledDeparture: null,
+          },
+          days,
+          cache,
+        )),
+      );
+    }
+  } catch (error) {
+    const failure = toFailure(error, null, null);
+    for (const date of arrivals.keys()) {
+      failDate(date, `The trains onward from ${via} could not be read. ${failure.message}`, failure.kind);
+    }
+    return empty;
+  }
+
+  const seen = new Set<string>();
+  const timetable: TimetabledConnection[] = [];
+  for (const match of matches) {
+    if (match.scheduledDeparture === null || match.scheduledArrival === null) continue;
+    const key = `${match.tocCode}|${match.scheduledDeparture}|${match.scheduledArrival}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    timetable.push({
+      tocCode: match.tocCode,
+      scheduledDeparture: match.scheduledDeparture,
+      scheduledArrival: match.scheduledArrival,
+    });
+  }
+
+  // For each day, only the trains that could matter: booked from a little
+  // before the first train got in, to the longest wait after.
+  const wanted = new Map<string, Set<string>>();
+  for (const [date, { scheduled, actual }] of arrivals) {
+    const opens = actual - LOOKBACK_MINUTES;
+    const closes = Math.max(actual, scheduled) + MAX_WAIT_MINUTES + CHANGE_TIME_HEADROOM_MINUTES;
+    if (closes > horizon) {
+      failDate(date, `The first train reached ${via} too late for its connections to be checked.`);
+      continue;
+    }
+    const rids = new Set<string>();
+    for (const match of matches) {
+      const departs = parseClockTime(match.scheduledDeparture);
+      if (departs === null) continue;
+      if (minutesLate(opens, departs) < 0 || minutesLate(departs, closes) < 0) continue;
+      for (const rid of match.rids) {
+        const belongs = ridDate(rid);
+        if (belongs === null || belongs === date) rids.add(rid);
+      }
+    }
+    wanted.set(date, rids);
+  }
+
+  const onwardByDate = new Map<string, ServiceRecord[]>();
+  const allRids = [...new Set([...wanted.values()].flatMap((rids) => [...rids]))];
+  const fetched = await mapWithConcurrency(allRids, DETAIL_CONCURRENCY, async (rid) => {
+    try {
+      return { rid, record: await fetchDetails(client, rid, request.today, cache) };
+    } catch (error) {
+      return { rid, error };
+    }
+  });
+
+  for (const result of fetched) {
+    if ('error' in result) {
+      // A train we failed to read is a train that might have been the way on.
+      const failure = toFailure(result.error, null, result.rid);
+      for (const [date, rids] of wanted) {
+        if (rids.has(result.rid)) {
+          failDate(date, `A train onward from ${via} could not be read. ${failure.message}`, failure.kind);
+        }
+      }
+      continue;
+    }
+    const existing = onwardByDate.get(result.record.date);
+    if (existing) existing.push(result.record);
+    else onwardByDate.set(result.record.date, [result.record]);
+  }
+
+  return { timetable, onwardByDate, failedDates, failures };
 }
 
 function classifyFor(

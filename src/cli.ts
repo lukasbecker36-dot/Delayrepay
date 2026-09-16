@@ -19,11 +19,14 @@ const USAGE = `
 Scan a commute for journeys that look claimable.
 
   npm run scan -- --from LBG --to HSK --depart 1835 --days 7
+  npm run scan -- --from HSK --via CLJ --to SPB --depart 0703
 
 Options:
   --from CRS        Origin station code.            (required)
   --to CRS          Destination station code.       (required)
   --depart HHMM     Timetabled departure you take.  (required)
+  --via CRS         Where you change trains, if you do. The connection is
+                    taken from the timetable, not asked for.
   --days N          How many days back to look. Default 28, the claim window.
   --on weekday|saturday|sunday
                     Which days to check. Default weekday.
@@ -68,6 +71,8 @@ function parseArgs(argv: readonly string[]): Options {
   const from = flags.get('from')?.toUpperCase();
   const to = flags.get('to')?.toUpperCase();
   const depart = flags.get('depart');
+  const via = flags.get('via')?.toUpperCase() ?? null;
+  if (via !== null && !/^[A-Z0-9]{3}$/.test(via)) fail(`--via must be a station code like CLJ, not "${via}".`);
 
   if (!from || !to || !depart) fail(`Missing --from, --to or --depart.\n\n${USAGE}`);
   if (!/^\d{4}$/.test(depart)) fail(`--depart must be a 24-hour time like 1835, not "${depart}".`);
@@ -103,6 +108,7 @@ function parseArgs(argv: readonly string[]): Options {
     request: {
       from,
       to,
+      via,
       fromDate: addDays(today, -days),
       toDate: today,
       fromTime: pad(departMinutes - 5),
@@ -147,7 +153,9 @@ async function main(): Promise<void> {
   }
 
   process.stdout.write(
-    `Scanning ${request.from} to ${request.to}, the ${request.scheduledDeparture} ` +
+    `Scanning ${request.from} to ${request.to}` +
+      (request.via ? `, changing at ${request.via},` : '') +
+      ` the ${request.scheduledDeparture} ` +
       `departure, ${request.fromDate} to ${request.toDate}.\n\n`,
   );
 

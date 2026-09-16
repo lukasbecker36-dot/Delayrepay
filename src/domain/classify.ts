@@ -9,7 +9,11 @@
 import { minutesLate, parseClockTime } from './time.js';
 import { articleFor, describeLateness, displayClockTime } from './copy.js';
 import { claimWindowFor } from './window.js';
-import { resolveThreshold, DEFAULT_MINIMUM_DELAY_MINUTES } from './operators.js';
+import {
+  resolveThreshold,
+  DEFAULT_MINIMUM_DELAY_MINUTES,
+  type ResolvedThreshold,
+} from './operators.js';
 import { spansClockChange } from './clockChange.js';
 import type { OnwardConnection } from './onward.js';
 import type {
@@ -47,6 +51,20 @@ function reasonCodeNotes(reasonCode: string | null): readonly string[] {
   ];
 }
 
+
+/** The caveat owed when a threshold was assumed rather than read from the operator's terms. */
+export function thresholdNotes(threshold: ResolvedThreshold): readonly string[] {
+  if (threshold.confirmed) return [];
+  return [
+    threshold.operator
+      ? `${threshold.operator.name}'s Delay Repay threshold has not been confirmed, ` +
+        `so ${DEFAULT_MINIMUM_DELAY_MINUTES} minutes was assumed. Some operators only ` +
+        `pay from 30 minutes. Check their terms before claiming.`
+      : `No Delay Repay threshold on file for this operator, so ` +
+        `${DEFAULT_MINIMUM_DELAY_MINUTES} minutes was assumed. Check their terms ` +
+        `before claiming.`,
+  ];
+}
 
 export interface ClassifyInput {
   /** The matched service, or null when HSP returned nothing for this journey. */
@@ -158,26 +176,18 @@ export function classifyJourney(input: ClassifyInput): JourneyAssessment {
   const threshold = resolveThreshold(record?.tocCode, input.thresholdMinutes);
   // Only worth saying when there is a service to score. On a journey we could
   // not find at all, the threshold is beside the point.
-  if (!threshold.confirmed && record !== null) {
-    notes.push(
-      threshold.operator
-        ? `${threshold.operator.name}'s Delay Repay threshold has not been confirmed, ` +
-          `so ${DEFAULT_MINIMUM_DELAY_MINUTES} minutes was assumed. Some operators only ` +
-          `pay from 30 minutes. Check their terms before claiming.`
-        : `No Delay Repay threshold on file for this operator, so ` +
-          `${DEFAULT_MINIMUM_DELAY_MINUTES} minutes was assumed. Check their terms ` +
-          `before claiming.`,
-    );
-  }
+  if (record !== null) notes.push(...thresholdNotes(threshold));
 
   const base = {
     date,
     from,
     to,
-    // Defaults for the two fields only a stopped-short journey sets. Declared
-    // once here so a new outcome cannot forget them.
+    // Defaults for the fields only a stopped-short journey or a journey with a
+    // change sets. Declared once here so a new outcome cannot forget them.
     lastRecordedCall: null,
     onwardConnection: null,
+    change: null,
+    via: null,
     operator: threshold.operator,
     thresholdMinutes: threshold.minutes,
     thresholdConfirmed: threshold.confirmed,

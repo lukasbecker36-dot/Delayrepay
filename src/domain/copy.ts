@@ -47,24 +47,40 @@ export function articleFor(value: number): string {
 
 /** How a journey reads in a list of results. */
 export function describeOutcome(assessment: JourneyAssessment): string {
+  // On a journey with a change, say where the lateness was measured and where
+  // the change was, so a figure for the whole journey is not read as one train's.
+  const measured =
+    assessment.change === null
+      ? `Arrived ${describeLateness(assessment.delayMinutes ?? 0)}`
+      : `Arrived at ${assessment.to} ${describeLateness(assessment.delayMinutes ?? 0)}, ` +
+        `changing at ${assessment.change.via}`;
+
   switch (assessment.outcome) {
     case 'delayed':
       return (
-        `Arrived ${describeLateness(assessment.delayMinutes ?? 0)}, at or over the ` +
+        `${measured}, at or over the ` +
         `${assessment.thresholdMinutes}-minute threshold. This looks claimable.`
       );
     case 'arrival-not-recorded':
+      if (assessment.change !== null) {
+        return (
+          `No train onward from ${assessment.change.via} to ${assessment.to} was ` +
+          'recorded after this one got there. This looks claimable.'
+        );
+      }
       return (
         'No arrival recorded, which usually means the service was cancelled. ' +
         'This looks claimable.'
       );
     case 'did-not-call': {
+      // A journey with a change is judged here only as far as the change.
+      const stop = assessment.via ?? assessment.to;
       const onward = assessment.onwardConnection;
       if (onward !== null) {
         // With a connection assumed there is a real arrival delay to state, so
         // state it - while naming it as a total rather than as this train's.
         return (
-          `This train ran but did not call at ${assessment.to}. On the next train ` +
+          `This train ran but did not call at ${stop}. On the next train ` +
           `from ${onward.from} you would have got in at ` +
           `${displayClockTime(onward.arrived)}, ` +
           `${describeLateness(onward.totalDelayMinutes)} in total` +
@@ -85,13 +101,19 @@ export function describeOutcome(assessment: JourneyAssessment): string {
               ? '.'
               : `, ${describeLateness(seen.minutesLate)} there.`);
       return (
-        `This train ran but did not call at ${assessment.to}.${where} ` +
+        `This train ran but did not call at ${stop}.${where} ` +
         'This looks claimable.'
       );
     }
+    case 'unconfirmed':
+      return (
+        `On the trains recorded, ${measured.charAt(0).toLowerCase()}${measured.slice(1)} - ` +
+        'but the data is missing trains that could put this inside the ' +
+        `${assessment.thresholdMinutes}-minute threshold. Check this one yourself.`
+      );
     case 'within-threshold':
       return (
-        `Arrived ${describeLateness(assessment.delayMinutes ?? 0)}, inside the ` +
+        `${measured}, inside the ` +
         `${assessment.thresholdMinutes}-minute threshold.`
       );
     case 'service-not-found':

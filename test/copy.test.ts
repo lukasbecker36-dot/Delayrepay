@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { classifyJourney } from '../src/domain/classify.js';
+import { classifyJourneyWithChange } from '../src/domain/classifyChange.js';
 import {
   describeExpiry,
   describeOutcome,
@@ -73,6 +74,67 @@ const AWAITING = classifyJourney({
 
 const EVERY_OUTCOME = [DELAYED, CANCELLED, DID_NOT_CALL, ON_TIME, NOT_FOUND, AWAITING];
 
+/**
+ * Journeys with a change, one per distinct way the connection can go, so their
+ * sentences pass the same guard. Brighton to Kensington Olympia via Clapham
+ * Junction; the connection is London Overground unless said otherwise.
+ */
+function withChange(
+  firstArrival: string | null,
+  connection: { departed: string | null; arrived: string | null } | null,
+  missingOnOtherDays = false,
+): JourneyAssessment {
+  const onward = (rid: string, toc: string, dep: string, arr: string, actualDep: string | null, actualArr: string | null): ServiceRecord => ({
+    rid,
+    date: '2026-09-08',
+    tocCode: toc,
+    calls: [
+      call('CLJ', { scheduledDeparture: dep, actualDeparture: actualDep }),
+      call('KPA', { scheduledArrival: arr, actualArrival: actualArr }),
+    ],
+  });
+  const records = [onward('late', 'SN', '0838', '0849', '0838', '0849')];
+  if (connection !== null) {
+    records.push(onward('planned', 'LO', '0811', '0822', connection.departed, connection.arrived));
+  }
+  const timetable = [
+    { tocCode: 'LO', scheduledDeparture: '0811', scheduledArrival: '0822' },
+    { tocCode: 'SN', scheduledDeparture: '0838', scheduledArrival: '0849' },
+    ...(missingOnOtherDays ? [{ tocCode: 'LO', scheduledDeparture: '0826', scheduledArrival: '0837' }] : []),
+  ];
+  return classifyJourneyWithChange({
+    record: {
+      rid: 'first',
+      date: '2026-09-08',
+      tocCode: 'SN',
+      calls: [
+        call('BTN', { scheduledDeparture: '0700', actualDeparture: firstArrival === null ? null : '0700' }),
+        call('CLJ', { scheduledArrival: '0752', actualArrival: firstArrival }),
+      ],
+    },
+    from: 'BTN',
+    via: 'CLJ',
+    to: 'KPA',
+    date: '2026-09-08',
+    today: TODAY,
+    timetable,
+    onward: records,
+    changeTimeFor: () => ({ minutes: 10, fromTimetable: true }),
+  });
+}
+
+const CHANGE_JOURNEYS = [
+  withChange('0752', { departed: '0811', arrived: '0822' }),
+  withChange('0805', { departed: '0811', arrived: '0822' }, true),
+  withChange('0752', { departed: null, arrived: null }),
+  withChange('0752', null),
+  withChange('0752', { departed: '0830', arrived: '0841' }),
+  withChange(null, { departed: '0811', arrived: '0822' }),
+  // Planned connection missing from the data: 57 minutes on the trains recorded,
+  // on time if it ran.
+  withChange('0752', { departed: '0811', arrived: null }),
+];
+
 describe('the words the tool is allowed to use', () => {
   it('covers every outcome the classifier can produce', () => {
     // If a new outcome is added, this test must be updated before the guard
@@ -87,6 +149,9 @@ describe('the words the tool is allowed to use', () => {
         'awaiting-data',
       ]),
     );
+    // Only a journey with a change can be unconfirmed; its sentences are
+    // checked through CHANGE_JOURNEYS below.
+    expect(CHANGE_JOURNEYS.map((a) => a.outcome)).toContain('unconfirmed');
   });
 
   it('says a journey looks claimable, and never that a claim is valid', () => {
@@ -136,7 +201,13 @@ describe('the words the tool is allowed to use', () => {
       ...['2026-08-01', '2026-08-18', '2026-09-12', '2026-09-15'].map((journeyDate) =>
         describeExpiry(claimWindowFor(journeyDate, TODAY)),
       ),
+      ...CHANGE_JOURNEYS.flatMap((assessment) => [
+        describeOutcome(assessment),
+        describeWhereToClaim(assessment),
+        ...assessment.notes,
+      ]),
       summariseScan(EVERY_OUTCOME),
+      summariseScan(CHANGE_JOURNEYS),
       describeOutcome(ARRIVED_EARLY),
       summariseScan([ON_TIME]),
       summariseScan([]),

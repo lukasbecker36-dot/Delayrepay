@@ -30,7 +30,8 @@ Rail Data Portal with the Historical Service Performance subscription ticked.
 npm run scan -- --from LBG --to HSK --depart 1835 --days 7
 ```
 
-`--on weekday|saturday|sunday` picks which days, `--days N` how far back
+`--via CRS` checks a journey with a change: the connection is taken from the
+timetable, not asked for. `--on weekday|saturday|sunday` picks which days, `--days N` how far back
 (default 28, the claim window), `--window MINS` overrides the operator's
 threshold, `--today YYYY-MM-DD` pretends it is another date. The time band is
 derived as five minutes either side of `--depart`, because the point is the one
@@ -82,6 +83,8 @@ results *your* journeys rather than every service in the band.
 | `src/domain/operators.ts` | TOC codes → operator, threshold, claim page. |
 | `src/domain/onward.ts` | The first train onward after a service stops short of the destination. |
 | `src/domain/changeTimes.ts` | Minimum change time at a station, from the timetable feed. |
+| `src/domain/connection.ts` | A journey with a change: planned connection, train caught, delay, operator responsible, and gaps in the data. |
+| `src/domain/classifyChange.ts` | Scores a journey with a change into the same result as any other. |
 | `scripts/import-change-times.mjs` | Regenerates `changeTimes.data.ts` from the feed's MSN and TSI files. Rerun at each timetable change. |
 | `src/domain/clockChange.ts` | Detects the two nights a year when clock arithmetic lies. |
 | `src/hsp/` | The HSP client, response parsing, typed failures, and the route+date cache. |
@@ -89,7 +92,7 @@ results *your* journeys rather than every service in the band.
 | `src/cli.ts` | The verification tool: run a real commute, check it against memory. |
 
 The domain layer has no dependency on the HSP layer, so the judgement can be
-tested without a network. 183 tests, all offline.
+tested without a network. 214 tests, all offline.
 
 ## What the checker will and will not say
 

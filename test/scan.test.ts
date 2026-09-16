@@ -453,3 +453,140 @@ describe('a journey that was abandoned partway', () => {
     expect(result.failures.some((f) => f.date === '2026-09-07')).toBe(true);
   });
 });
+
+describe('a journey with a change', () => {
+  const DAY = '2026-09-07';
+
+  function callAt(location: string, fields: Partial<ServiceRecord['calls'][number]>) {
+    return {
+      location,
+      scheduledDeparture: null,
+      scheduledArrival: null,
+      actualDeparture: null,
+      actualArrival: null,
+      lateCancReason: null,
+      ...fields,
+    };
+  }
+
+  /** Brighton 07:00, due into Clapham Junction 07:52, in at 08:05. */
+  const FIRST: ServiceRecord = {
+    rid: '202609071000001',
+    date: DAY,
+    tocCode: 'SN',
+    calls: [
+      callAt('BTN', { scheduledDeparture: '0700', actualDeparture: '0700' }),
+      callAt('CLJ', { scheduledArrival: '0752', actualArrival: '0805' }),
+    ],
+  };
+
+  function onward(rid: string, date: string, toc: string, dep: string, arr: string): ServiceRecord {
+    return {
+      rid,
+      date,
+      tocCode: toc,
+      calls: [
+        callAt('CLJ', { scheduledDeparture: dep, actualDeparture: dep }),
+        callAt('KPA', { scheduledArrival: arr, actualArrival: arr }),
+      ],
+    };
+  }
+
+  const RECORDS: Record<string, ServiceRecord> = {
+    [FIRST.rid]: FIRST,
+    '202609072000001': onward('202609072000001', DAY, 'LO', '0811', '0822'),
+    '202609072000002': onward('202609072000002', DAY, 'SN', '0838', '0849'),
+    '202609082000002': onward('202609082000002', '2026-09-08', 'SN', '0838', '0849'),
+  };
+
+  function changeClient(options: { connectionsThrow?: unknown; detailThrows?: string } = {}) {
+    const queries: string[] = [];
+    const details: string[] = [];
+    const client = {
+      async serviceMetrics(query: { fromLocation: string; toLocation: string; fromTime: string; toTime: string }) {
+        queries.push(`${query.fromLocation}-${query.toLocation}@${query.fromTime}-${query.toTime}`);
+        if (query.fromLocation === 'CLJ') {
+          if (options.connectionsThrow) throw options.connectionsThrow;
+          return [
+            { rids: ['202609072000001'], originLocation: 'CLJ', destinationLocation: 'KPA', scheduledDeparture: '0811', scheduledArrival: '0822', tocCode: 'LO' },
+            { rids: ['202609072000002', '202609082000002'], originLocation: 'CLJ', destinationLocation: 'KPA', scheduledDeparture: '0838', scheduledArrival: '0849', tocCode: 'SN' },
+          ];
+        }
+        return [
+          { rids: [FIRST.rid], originLocation: 'BTN', destinationLocation: 'CLJ', scheduledDeparture: '0700', scheduledArrival: '0752', tocCode: 'SN' },
+        ];
+      },
+      async serviceDetails(rid: string) {
+        details.push(rid);
+        if (rid === options.detailThrows) throw new HspError('unavailable', 'down');
+        const record = RECORDS[rid];
+        if (!record) throw new HspError('unknown', `no fixture for ${rid}`);
+        return record;
+      },
+    } as unknown as HspClient;
+    return { client, queries, details };
+  }
+
+  const request: ScanRequest = {
+    ...REQUEST,
+    via: 'CLJ',
+    to: 'KPA',
+    fromDate: DAY,
+    toDate: DAY,
+    fromTime: '0655',
+    toTime: '0705',
+    scheduledDeparture: '0700',
+  };
+
+  it('pins the first train as far as the change, then asks about the trains onward', async () => {
+    const { client, queries } = changeClient();
+    await runScan(client, request);
+    expect(queries[0]).toBe('BTN-CLJ@0655-0705');
+    // From 30 minutes before the earliest arrival (07:52 due) to the longest wait
+    // after the latest (08:05 in, plus 90 and 15 for the change): an hour at a time.
+    expect(queries.slice(1)).toEqual([
+      'CLJ-KPA@0722-0821',
+      'CLJ-KPA@0822-0921',
+      'CLJ-KPA@0922-0950',
+    ]);
+  });
+
+  it('scores the whole journey at the destination', async () => {
+    const { client } = changeClient();
+    const result = await runScan(client, request);
+    const journey = result.assessments[0];
+
+    // Planned: into CLJ 07:52, the 08:11, due KPA 08:22. In at 08:05, which is
+    // 6 minutes - under CLJ's 10 onto the Overground - so the 08:38, in at 08:49.
+    expect(journey?.via).toBe('CLJ');
+    expect(journey?.change?.planned?.scheduledDeparture).toBe('0811');
+    expect(journey?.delayMinutes).toBe(27);
+    expect(journey?.change?.responsibleTocCode).toBe('SN');
+    expect(journey?.looksClaimable).toBe(true);
+  });
+
+  it('fetches only the onward trains that ran on the day being checked', async () => {
+    const { client, details } = changeClient();
+    await runScan(client, request);
+    expect(details).toContain('202609072000002');
+    expect(details).not.toContain('202609082000002');
+  });
+
+  it('reports the day as unchecked when the trains onward cannot be read', async () => {
+    const { client } = changeClient({ connectionsThrow: new HspError('unavailable', 'down') });
+    const result = await runScan(client, request);
+
+    expect(result.assessments).toEqual([]);
+    expect(result.coverage.checked).toBe(0);
+    expect(result.failures.some((f) => f.date === DAY && f.message.includes('onward from CLJ'))).toBe(true);
+  });
+
+  it('will not score a day on a partial list of trains onward', async () => {
+    // Losing one onward train could hide the one that was caught.
+    const { client } = changeClient({ detailThrows: '202609072000001' });
+    const result = await runScan(client, request);
+
+    expect(result.assessments).toEqual([]);
+    expect(result.failures.some((f) => f.date === DAY)).toBe(true);
+  });
+});

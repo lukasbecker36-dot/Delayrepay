@@ -36,6 +36,12 @@ export interface ClassifyChangeInput {
   /** This day's records of trains from `via` to `to`. */
   readonly onward: readonly ServiceRecord[];
   readonly changeTimeFor: AssessChangeInput['changeTimeFor'];
+  /**
+   * TOC codes whose trains are left out of the connection entirely: never the
+   * planned connection, never the way on, never counted as missing. The result
+   * says so whenever the timetable had one to leave out.
+   */
+  readonly leaveOutOperators?: readonly string[];
 }
 
 function operatorName(tocCode: string | null): string {
@@ -64,6 +70,12 @@ export function classifyJourneyWithChange(input: ClassifyChangeInput): JourneyAs
       : { dataMayBeIncomplete: input.dataMayBeIncomplete }),
   });
 
+  const leftOut = new Set((input.leaveOutOperators ?? []).map((code) => code.trim().toUpperCase()));
+  const kept = (toc: string | null) => !leftOut.has((toc ?? '').trim().toUpperCase());
+  const leftOutNames = [
+    ...new Set(input.timetable.filter((slot) => !kept(slot.tocCode)).map((slot) => operatorName(slot.tocCode))),
+  ];
+
   const change =
     record === null
       ? null
@@ -72,8 +84,8 @@ export function classifyJourneyWithChange(input: ClassifyChangeInput): JourneyAs
           from,
           via,
           to,
-          timetable: input.timetable,
-          onward: input.onward,
+          timetable: input.timetable.filter((slot) => kept(slot.tocCode)),
+          onward: input.onward.filter((train) => kept(train.tocCode)),
           changeTimeFor: input.changeTimeFor,
         });
 
@@ -89,7 +101,17 @@ export function classifyJourneyWithChange(input: ClassifyChangeInput): JourneyAs
     return { ...firstLeg, to, via, notes };
   }
 
-  return scoreChange(input, record as ServiceRecord, firstLeg, change);
+  const scored = scoreChange(input, record as ServiceRecord, firstLeg, change);
+  if (leftOutNames.length === 0) return scored;
+  return {
+    ...scored,
+    notes: [
+      ...scored.notes,
+      `${leftOutNames.join(' and ')} trains from ${via} to ${to} are left out of this check. ` +
+        'If one of those was your connection or the train you took on, the figures here ' +
+        'will not match your journey.',
+    ],
+  };
 }
 
 function scoreChange(

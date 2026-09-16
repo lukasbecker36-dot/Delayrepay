@@ -165,8 +165,11 @@ Junction:
   leaving the change station at least the change time after the planned
   arrival there - what a journey planner would give. It sets the planned
   arrival at the destination.
-- **After a delay**, any operator's train counts as a way onward, London
-  Overground included.
+- **After a delay**, any operator's train counts as a way onward.
+- **London Overground is left out of connections**, decided 2026-09-17: never
+  the planned connection, never the way on, never counted as missing
+  (`CONNECTION_OPERATORS_LEFT_OUT` in `src/scan.ts`). Results say so when an
+  Overground train was left out. Single-train Overground journeys are unaffected.
 - The delay is measured at the final destination. The operator responsible is
   the one whose delay first broke the plan; if every connection was made, the
   operator of the last leg.
@@ -181,8 +184,13 @@ been the way on. So the planned timetable is taken from every day in the range,
 and each result carries a best case as if every gap ran to time. Where the
 threshold falls between the recorded delay and the best case, the outcome is
 `unconfirmed`: not claimable, flagged to check. On Hassocks to Shepherd's Bush
-that is most days - an honest answer about the data, not about the trains. A
-fuller source of Overground actuals is what would change it.
+that was most days, which is why the Overground is now left out.
+
+Darwin itself looks complete: on 16 September it showed four Overground trains
+from Clapham Junction to Shepherd's Bush running with actual times that HSP did
+not have (not yet re-checked once HSP had settled). Darwin's FTP keeps only
+about an hour of push port logs, so it cannot fill past gaps; recording it
+continuously is the route to complete Overground data if it is ever wanted.
 
 ---
 

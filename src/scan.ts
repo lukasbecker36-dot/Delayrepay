@@ -41,6 +41,17 @@ const CONNECTION_HORIZON_MINUTES = 240;
 const CHANGE_TIME_HEADROOM_MINUTES = 15;
 
 /**
+ * Operators left out of connections at a change station.
+ *
+ * HSP's London Overground records are too incomplete to plan or follow a
+ * connection on: over 21 weekdays at Clapham Junction each Overground departure
+ * was recorded on only 4 to 10 days, and trains Darwin shows running with actual
+ * times were absent from HSP. Left out by decision (CLAUDE.md, "Journeys with a
+ * change") until a complete source is in place. Results say when it happened.
+ */
+const CONNECTION_OPERATORS_LEFT_OUT: readonly string[] = ['LO'];
+
+/**
  * Connection lookups ask HSP for this many minutes of departures at a time.
  *
  * A change station is often busy, and a month of departures across a few hours
@@ -356,6 +367,7 @@ function classifyWithChange(
     onward,
     changeTimeFor: (arrivingToc, departingToc) =>
       resolveChangeTime(via, arrivingToc, departingToc),
+    leaveOutOperators: CONNECTION_OPERATORS_LEFT_OUT,
     ...(request.thresholdMinutes == null ? {} : { thresholdMinutes: request.thresholdMinutes }),
   });
 }
@@ -496,6 +508,8 @@ async function fetchConnections(
     }
     const rids = new Set<string>();
     for (const match of matches) {
+      // Their records would be discarded, so they are not worth asking for.
+      if (CONNECTION_OPERATORS_LEFT_OUT.includes((match.tocCode ?? '').toUpperCase())) continue;
       const departs = parseClockTime(match.scheduledDeparture);
       if (departs === null) continue;
       if (minutesLate(opens, departs) < 0 || minutesLate(departs, closes) < 0) continue;

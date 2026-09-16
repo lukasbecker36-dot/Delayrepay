@@ -319,6 +319,43 @@ describe('scoring a journey with a change', () => {
     expect(result.notes.join(' ')).toContain('15 minutes late instead of 28 minutes late');
   });
 
+  it('leaves an operator out of the connection entirely when told to, and says so', () => {
+    // Without the Overground, the plan is Southern's 08:38 (in 08:52), and that
+    // is the train caught: no delay, and nothing missing.
+    const result = classifyJourneyWithChange({
+      record: firstTrain('0752'),
+      from: 'HSK',
+      via: 'CLJ',
+      to: 'SPB',
+      date: DATE,
+      today: TODAY,
+      timetable: TIMETABLE,
+      onward: [ran(SN_0838)],
+      changeTimeFor: CLAPHAM,
+      leaveOutOperators: ['LO'],
+    });
+    expect(result.change?.planned?.scheduledDeparture).toBe('0838');
+    expect(result.change?.missingFromData).toEqual([]);
+    expect(result.delayMinutes).toBe(0);
+    expect(result.notes.join(' ')).toContain('London Overground trains from CLJ to SPB are left out');
+  });
+
+  it('says nothing about leaving an operator out when it had no trains to leave out', () => {
+    const result = classifyJourneyWithChange({
+      record: firstTrain('0752'),
+      from: 'HSK',
+      via: 'CLJ',
+      to: 'SPB',
+      date: DATE,
+      today: TODAY,
+      timetable: [SN_0838],
+      onward: [ran(SN_0838)],
+      changeTimeFor: CLAPHAM,
+      leaveOutOperators: ['LO'],
+    });
+    expect(result.notes.join(' ')).not.toContain('left out');
+  });
+
   it('judges a first train that never reached the change on its own, naming the change station', () => {
     const cancelled = classify(firstTrain(null, null), TIMETABLE.map((slot) => ran(slot)));
     expect(cancelled.outcome).toBe('arrival-not-recorded');

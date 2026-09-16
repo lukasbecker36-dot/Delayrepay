@@ -494,7 +494,7 @@ describe('a journey with a change', () => {
 
   const RECORDS: Record<string, ServiceRecord> = {
     [FIRST.rid]: FIRST,
-    '202609072000001': onward('202609072000001', DAY, 'LO', '0811', '0822'),
+    '202609072000001': onward('202609072000001', DAY, 'SW', '0811', '0822'),
     '202609072000002': onward('202609072000002', DAY, 'SN', '0838', '0849'),
     '202609082000002': onward('202609082000002', '2026-09-08', 'SN', '0838', '0849'),
   };
@@ -508,7 +508,7 @@ describe('a journey with a change', () => {
         if (query.fromLocation === 'CLJ') {
           if (options.connectionsThrow) throw options.connectionsThrow;
           return [
-            { rids: ['202609072000001'], originLocation: 'CLJ', destinationLocation: 'KPA', scheduledDeparture: '0811', scheduledArrival: '0822', tocCode: 'LO' },
+            { rids: ['202609072000001'], originLocation: 'CLJ', destinationLocation: 'KPA', scheduledDeparture: '0811', scheduledArrival: '0822', tocCode: 'SW' },
             { rids: ['202609072000002', '202609082000002'], originLocation: 'CLJ', destinationLocation: 'KPA', scheduledDeparture: '0838', scheduledArrival: '0849', tocCode: 'SN' },
           ];
         }
@@ -563,6 +563,31 @@ describe('a journey with a change', () => {
     expect(journey?.delayMinutes).toBe(27);
     expect(journey?.change?.responsibleTocCode).toBe('SN');
     expect(journey?.looksClaimable).toBe(true);
+  });
+
+  it('does not fetch or use London Overground trains onward', async () => {
+    const overground = {
+      rids: ['202609073000001'],
+      originLocation: 'CLJ',
+      destinationLocation: 'KPA',
+      scheduledDeparture: '0815',
+      scheduledArrival: '0826',
+      tocCode: 'LO',
+    };
+    const { client, details } = changeClient();
+    const withOverground = {
+      ...client,
+      async serviceMetrics(query: { fromLocation: string }) {
+        const result = await client.serviceMetrics(query as never);
+        return query.fromLocation === 'CLJ' ? [...result, overground] : result;
+      },
+      serviceDetails: client.serviceDetails,
+    } as unknown as HspClient;
+
+    const result = await runScan(withOverground, request);
+    expect(details).not.toContain('202609073000001');
+    expect(result.assessments[0]?.change?.caught?.rid).toBe('202609072000002');
+    expect(result.assessments[0]?.notes.join(' ')).toContain('London Overground trains from CLJ to KPA are left out');
   });
 
   it('fetches only the onward trains that ran on the day being checked', async () => {

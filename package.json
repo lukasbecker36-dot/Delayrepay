@@ -5,14 +5,14 @@
   "description": "Scans a UK rail commute against HSP historical performance data and flags journeys that look claimable under Delay Repay.",
   "type": "module",
   "engines": {
-    "node": ">=22"
+    "node": ">=22.9"
   },
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
-    "scan": "npm run build --silent && node dist/cli.js"
+    "scan": "npm run build --silent && node --env-file-if-exists=.env dist/cli.js"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",

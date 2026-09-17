@@ -72,7 +72,56 @@ const AWAITING = classifyJourney({
   dataMayBeIncomplete: true,
 });
 
-const EVERY_OUTCOME = [DELAYED, CANCELLED, DID_NOT_CALL, ON_TIME, NOT_FOUND, AWAITING];
+const SKIPPED_ORIGIN = assess([
+  call('PRP', { scheduledDeparture: '0710', actualDeparture: '0710' }),
+  call('BTN', { scheduledDeparture: '0715' }),
+  call('VIC', { scheduledArrival: '0817', actualArrival: '0820' }),
+]);
+
+const EVERY_OUTCOME = [DELAYED, CANCELLED, DID_NOT_CALL, ON_TIME, NOT_FOUND, AWAITING, SKIPPED_ORIGIN];
+
+/** A train measured on the way on, so the sentences that quote a total are checked too. */
+const WAY_ON = {
+  rid: 'on',
+  from: 'BTN',
+  to: 'VIC',
+  departed: '0745',
+  arrived: '0850',
+  waitMinutes: 30,
+  totalDelayMinutes: 33,
+  changeMinutes: 0,
+  changeTimeFromTimetable: true,
+  leftInsideChangeTime: null,
+};
+const MEASURED_ON_A_WAY_ON = [
+  classifyJourney({
+    record: { rid: 'c', date: '2026-09-08', tocCode: 'SN', calls: [call('BTN', { scheduledDeparture: '0715' }), call('VIC', { scheduledArrival: '0817' })] },
+    from: 'BTN',
+    to: 'VIC',
+    date: '2026-09-08',
+    today: TODAY,
+    onwardConnection: WAY_ON,
+  }),
+  classifyJourney({
+    record: {
+      rid: 'p',
+      date: '2026-09-08',
+      tocCode: 'SN',
+      calls: [
+        call('BTN', { scheduledDeparture: '0715', actualDeparture: '0715' }),
+        call('CLJ', { scheduledArrival: '0800', actualArrival: '0801' }),
+        call('VIC', { scheduledArrival: '0817' }),
+        call('XYZ', { scheduledArrival: '0830', actualArrival: '0830' }),
+      ],
+    },
+    from: 'BTN',
+    to: 'VIC',
+    date: '2026-09-08',
+    today: TODAY,
+    onwardConnection: { ...WAY_ON, from: 'CLJ', totalDelayMinutes: 5 },
+    carriedPastConnection: { ...WAY_ON, from: 'XYZ', totalDelayMinutes: 40 },
+  }),
+];
 
 /**
  * Journeys with a change, one per distinct way the connection can go, so their
@@ -185,6 +234,7 @@ describe('the words the tool is allowed to use', () => {
         'within-threshold',
         'service-not-found',
         'awaiting-data',
+        'skipped-origin',
       ]),
     );
     // Only a journey with a change can be unconfirmed; its sentences are
@@ -239,6 +289,11 @@ describe('the words the tool is allowed to use', () => {
       ...['2026-08-01', '2026-08-18', '2026-09-12', '2026-09-15'].map((journeyDate) =>
         describeExpiry(claimWindowFor(journeyDate, TODAY)),
       ),
+      ...MEASURED_ON_A_WAY_ON.flatMap((assessment) => [
+        describeOutcome(assessment),
+        describeWhereToClaim(assessment),
+        ...assessment.notes,
+      ]),
       ...CHANGE_JOURNEYS.flatMap((assessment) => [
         describeOutcome(assessment),
         describeWhereToClaim(assessment),
@@ -288,8 +343,9 @@ describe('describeExpiry', () => {
 
 describe('summariseScan', () => {
   it('is one message covering everything, not one per journey', () => {
+    // Delayed, cancelled, stopped short, and a train that did not stop at the origin.
     const summary = summariseScan(EVERY_OUTCOME);
-    expect(summary).toContain('3 journeys look claimable');
+    expect(summary).toContain('4 journeys look claimable');
     expect(summary).toContain('could not be checked');
     expect(summary).toContain('too recent to check yet');
   });

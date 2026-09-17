@@ -147,6 +147,28 @@ passenger was set down (`src/domain/onward.ts`). The terms, read 2026-09-16:
 So the passenger names a train and the operator tests it against what was
 available. Waiting for a later train does not raise the delay.
 
+The same rule covers every way a train can fail to take someone to their
+destination, on a single train and on either side of a change:
+
+| What the data shows | Measured from |
+| --- | --- |
+| No departure or arrival recorded (cancelled) | the origin, at the booked departure, no change time |
+| Recorded before and after the origin but not at it (did not stop there) | the origin, at the booked departure, no change time |
+| Last recorded before the destination, never after (stopped short) | that station, at the time recorded, plus its change time |
+| Recorded after the destination but not at it (ran past without calling) | **both** the last station before, and the next station after (a train back) |
+| A connecting train left, was recorded further on, but never reached the destination | not a way on; measured to the next train that got there |
+
+A train that ran past without calling raises a question the data cannot
+answer: was the change of plan announced in time to get off before it, or was
+the passenger carried on? Both are measured. The result uses getting off
+before, unless only being carried on is over the threshold - a possible claim
+is not dropped on a guess - and a note gives the other figure.
+
+A train at the start of its run with no departure recorded, but recorded
+later, is a gap in the data, not a skipped stop: a train cannot skip where it
+starts. Unverified: whether HSP ever records a pass time at a station a train
+ran through as an arrival, which would read as the train having called.
+
 **The app never asks which train was taken.** There is no input for it, by
 design. The first available train is the figure to report, and the copy says
 so; it must not invite the user to claim on a later arrival. The only exception

@@ -11,6 +11,7 @@
  */
 
 import type { JourneyAssessment } from './types.js';
+import type { OnwardConnection } from './onward.js';
 import type { ClaimWindow } from './window.js';
 
 /** "HHMM" as "HH:MM", for prose rather than for the times column. */
@@ -45,6 +46,34 @@ export function articleFor(value: number): string {
   return 'a';
 }
 
+/** How a journey measured on a replacement for its first train begins. */
+function replacementLead(from: string, via: string, reason: string): string {
+  switch (reason) {
+    case 'skipped-origin':
+      return `Your train did not stop at ${from}`;
+    case 'carried-past':
+      return `Your train ran past ${via} without stopping`;
+    default:
+      return `Your train did not reach ${via}`;
+  }
+}
+
+/** "On the next train from X you would have got in at ..., N minutes late in total, ..." */
+function nextTrainSentence(
+  assessment: JourneyAssessment,
+  train: OnwardConnection,
+  lead: string,
+): string {
+  return (
+    `${lead} from ${train.from} you would have got in at ` +
+    `${displayClockTime(train.arrived)}, ` +
+    `${describeLateness(train.totalDelayMinutes)} in total` +
+    (assessment.looksClaimable
+      ? `, at or over the ${assessment.thresholdMinutes}-minute threshold. This looks claimable.`
+      : `, inside the ${assessment.thresholdMinutes}-minute threshold.`)
+  );
+}
+
 /** How a journey reads in a list of results. */
 export function describeOutcome(assessment: JourneyAssessment): string {
   // On a journey with a change, say where the lateness was measured and where
@@ -53,7 +82,8 @@ export function describeOutcome(assessment: JourneyAssessment): string {
     assessment.change === null
       ? `Arrived ${describeLateness(assessment.delayMinutes ?? 0)}`
       : assessment.change.replacement !== null
-        ? `Your train did not reach ${assessment.change.via}; on the next trains you would ` +
+        ? `${replacementLead(assessment.from, assessment.change.via, assessment.change.replacement.reason)}; ` +
+          'on the next trains you would ' +
           `have arrived at ${assessment.to} ${describeLateness(assessment.delayMinutes ?? 0)}`
         : `Arrived at ${assessment.to} ${describeLateness(assessment.delayMinutes ?? 0)}, ` +
           `changing at ${assessment.change.via}`;
@@ -71,9 +101,22 @@ export function describeOutcome(assessment: JourneyAssessment): string {
           'recorded after this one got there. This looks claimable.'
         );
       }
+      if (assessment.onwardConnection !== null) {
+        return (
+          'No arrival recorded, which usually means the service was cancelled. ' +
+          nextTrainSentence(assessment, assessment.onwardConnection, 'On the next train')
+        );
+      }
       return (
         'No arrival recorded, which usually means the service was cancelled. ' +
         'This looks claimable.'
+      );
+    case 'skipped-origin':
+      return (
+        `This train did not call at ${assessment.from}, so it could not be boarded. ` +
+        (assessment.onwardConnection === null
+          ? 'This looks claimable.'
+          : nextTrainSentence(assessment, assessment.onwardConnection, 'On the next train'))
       );
     case 'did-not-call': {
       // A journey with a change is judged here only as far as the change.
@@ -82,27 +125,30 @@ export function describeOutcome(assessment: JourneyAssessment): string {
       if (onward !== null) {
         // With a connection assumed there is a real arrival delay to state, so
         // state it - while naming it as a total rather than as this train's.
+        if (assessment.carriedPast?.reported) {
+          return (
+            `This train ran past ${stop} without calling there. ` +
+            nextTrainSentence(assessment, onward, 'On the first train back')
+          );
+        }
         return (
-          `This train ran but did not call at ${stop}. On the next train ` +
-          `from ${onward.from} you would have got in at ` +
-          `${displayClockTime(onward.arrived)}, ` +
-          `${describeLateness(onward.totalDelayMinutes)} in total` +
-          (assessment.looksClaimable
-            ? `, at or over the ${assessment.thresholdMinutes}-minute threshold. ` +
-              'This looks claimable.'
-            : `, inside the ${assessment.thresholdMinutes}-minute threshold.`)
+          `This train ran but did not call at ${stop}. ` +
+          nextTrainSentence(assessment, onward, 'On the next train')
         );
       }
       // No connection found: the train never reached the destination, so there
       // is no arrival to be late for and no total to quote.
       const seen = assessment.lastRecordedCall;
+      const next = assessment.carriedPast?.call ?? null;
       const where =
-        seen === null
-          ? ''
-          : ` It was last recorded at ${seen.location}` +
+        seen !== null
+          ? ` It was last recorded at ${seen.location}` +
             (seen.minutesLate === null
               ? '.'
-              : `, ${describeLateness(seen.minutesLate)} there.`);
+              : `, ${describeLateness(seen.minutesLate)} there.`)
+          : next !== null
+            ? ` It ran past without calling and was next recorded at ${next.location}.`
+            : '';
       return (
         `This train ran but did not call at ${stop}.${where} ` +
         'This looks claimable.'

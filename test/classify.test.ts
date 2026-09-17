@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { classifyJourney } from '../src/domain/classify.js';
+import { describeOutcome } from '../src/domain/copy.js';
+import type { OnwardConnection } from '../src/domain/onward.js';
 import type { ServiceCall, ServiceRecord } from '../src/domain/types.js';
 
 const TODAY = '2026-09-15';
@@ -614,5 +616,152 @@ describe('a stopped-short journey once the connection is known', () => {
     expect(notes).toContain('A train also left at 20:05');
     expect(notes).toContain('claim on that train instead');
     expect(assessed.notes.join(' ')).not.toContain('A train also left');
+  });
+});
+
+describe('a train that does not take you to your destination', () => {
+  // London Bridge 18:35 to Hassocks, due 19:32.
+  function train(from: string, departed: string, arrived: string, total: number, wait = 10): OnwardConnection {
+    return {
+      rid: `${from}-${departed}`,
+      from,
+      to: 'HSK',
+      departed,
+      arrived,
+      waitMinutes: wait,
+      totalDelayMinutes: total,
+      changeMinutes: 3,
+      changeTimeFromTimetable: true,
+      leftInsideChangeTime: null,
+    };
+  }
+
+  const judge = (calls: readonly ServiceCall[], extra: Record<string, unknown> = {}) =>
+    classify(record(calls, { date: '2026-09-03', tocCode: 'TL' }), {
+      from: 'LBG',
+      to: 'HSK',
+      date: '2026-09-03',
+      ...extra,
+    });
+
+  describe('cancelled outright', () => {
+    const cancelled = [
+      call('LBG', { scheduledDeparture: '1835' }),
+      call('GTW', { scheduledArrival: '1904' }),
+      call('HSK', { scheduledArrival: '1932' }),
+    ];
+
+    it('is measured on the next train to leave the origin after it was due', () => {
+      const result = judge(cancelled, { onwardConnection: train('LBG', '1905', '2002', 30, 30) });
+      expect(result.outcome).toBe('arrival-not-recorded');
+      expect(result.delayMinutes).toBe(30);
+      expect(result.looksClaimable).toBe(true);
+      expect(result.needsManualCheck).toBe(true);
+      expect(result.evidence).toBe('assumed-onward-connection');
+      expect(result.notes.join(' ')).toContain('left LBG at 19:05, 30 minutes after yours was due to leave');
+      expect(describeOutcome(result)).toContain('On the next train from LBG you would have got in at 20:02, 30 minutes late in total');
+    });
+
+    it('can find a cancellation cost less than the threshold, and says to check', () => {
+      const result = judge(cancelled, { onwardConnection: train('LBG', '1840', '1942', 10, 5) });
+      expect(result.looksClaimable).toBe(false);
+      expect(result.needsManualCheck).toBe(true);
+      expect(result.notes.join(' ')).toContain('only because a train came along promptly');
+    });
+
+    it('still looks claimable when no train from the origin was found', () => {
+      const result = judge(cancelled);
+      expect(result.delayMinutes).toBeNull();
+      expect(result.looksClaimable).toBe(true);
+    });
+  });
+
+  describe('not stopping at the origin', () => {
+    const skipped = [
+      call('BFR', { scheduledDeparture: '1830', actualDeparture: '1831' }),
+      call('LBG', { scheduledDeparture: '1835' }),
+      call('GTW', { scheduledArrival: '1904', actualArrival: '1905' }),
+      call('HSK', { scheduledArrival: '1932', actualArrival: '1933' }),
+    ];
+
+    it('is not boardable even though it reached the destination on time', () => {
+      const result = judge(skipped);
+      expect(result.outcome).toBe('skipped-origin');
+      expect(result.looksClaimable).toBe(true);
+      expect(result.needsManualCheck).toBe(true);
+      expect(describeOutcome(result)).toContain('did not call at LBG, so it could not be boarded');
+    });
+
+    it('is measured on the next train from the origin', () => {
+      const result = judge(skipped, { onwardConnection: train('LBG', '1900', '1957', 25, 25) });
+      expect(result.delayMinutes).toBe(25);
+      expect(result.looksClaimable).toBe(true);
+    });
+
+    it('is not assumed when the missing time is at the start of the train\'s run', () => {
+      // A train cannot skip the station it starts from: that is a gap in the data.
+      const firstStopGap = [
+        call('LBG', { scheduledDeparture: '1835' }),
+        call('HSK', { scheduledArrival: '1932', actualArrival: '1933' }),
+      ];
+      expect(judge(firstStopGap).outcome).toBe('within-threshold');
+    });
+  });
+
+  describe('running past the destination without calling', () => {
+    // Via Haywards Heath, then fast through Hassocks to Brighton.
+    const ranPast = [
+      call('LBG', { scheduledDeparture: '1835', actualDeparture: '1835' }),
+      call('HHE', { scheduledArrival: '1921', actualArrival: '1925' }),
+      call('HSK', { scheduledArrival: '1932' }),
+      call('BTN', { scheduledArrival: '1945', actualArrival: '1950' }),
+    ];
+
+    it('measures getting off before when that and being carried on are both over the threshold', () => {
+      const result = judge(ranPast, {
+        onwardConnection: train('HHE', '1935', '1952', 20),
+        carriedPastConnection: train('BTN', '2000', '2012', 40),
+      });
+      expect(result.outcome).toBe('did-not-call');
+      expect(result.delayMinutes).toBe(20);
+      expect(result.carriedPast?.reported).toBe(false);
+      expect(result.carriedPast?.call.location).toBe('BTN');
+      expect(result.notes.join(' ')).toContain('It ran on past HSK without calling there. It was next recorded at BTN at 19:50');
+      expect(result.notes.join(' ')).toContain('carried on to BTN, the first train back reached HSK at 20:12, 40 minutes late.');
+    });
+
+    it('measures being carried on when only that is over the threshold', () => {
+      const result = judge(ranPast, {
+        onwardConnection: train('HHE', '1930', '1942', 10),
+        carriedPastConnection: train('BTN', '2000', '2012', 40),
+      });
+      expect(result.delayMinutes).toBe(40);
+      expect(result.looksClaimable).toBe(true);
+      expect(result.carriedPast?.reported).toBe(true);
+      expect(result.onwardConnection?.from).toBe('BTN');
+      expect(describeOutcome(result)).toContain('ran past HSK without calling there. On the first train back from BTN');
+      expect(result.notes.join(' ')).toContain('in time for you to get off at HHE instead');
+      expect(result.notes.join(' ')).toContain('Which applies depends on whether you could get off there');
+    });
+
+    it('measures being carried on when there was no stop before the destination to get off at', () => {
+      const noStopBefore = [
+        call('LBG', { scheduledDeparture: '1835', actualDeparture: '1835' }),
+        call('HSK', { scheduledArrival: '1932' }),
+        call('BTN', { scheduledArrival: '1945', actualArrival: '1946' }),
+      ];
+      const result = judge(noStopBefore, { carriedPastConnection: train('BTN', '1955', '2008', 36) });
+      expect(result.outcome).toBe('did-not-call');
+      expect(result.lastRecordedCall).toBeNull();
+      expect(result.delayMinutes).toBe(36);
+      expect(result.notes.join(' ')).toContain('with no stop before it to get off at');
+    });
+
+    it('still flags it with nothing found either way', () => {
+      const result = judge(ranPast);
+      expect(result.delayMinutes).toBeNull();
+      expect(result.looksClaimable).toBe(true);
+      expect(result.carriedPast?.connection).toBeNull();
+    });
   });
 });

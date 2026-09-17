@@ -100,13 +100,23 @@ export interface ClassifyInput {
    * the destination - instead of on a figure measured somewhere else.
    */
   readonly onwardConnection?: OnwardConnection | null;
+  /**
+   * The first train back to the destination from the station a service was
+   * next recorded at after running past it. Supplied, like `onwardConnection`,
+   * by the caller on a second pass.
+   */
+  readonly carriedPastConnection?: OnwardConnection | null;
 }
 
 interface LegCalls {
   readonly origin: ServiceCall;
   readonly destination: ServiceCall;
+  /** Calls before the origin, in order. */
+  readonly before: readonly ServiceCall[];
   /** Calls strictly between the two, in order. The evidence that a service ran. */
   readonly between: readonly ServiceCall[];
+  /** Calls after the destination, in order. Where a service that ran past it went. */
+  readonly after: readonly ServiceCall[];
 }
 
 function sameStation(a: string, b: string): boolean {
@@ -132,7 +142,13 @@ function findLeg(
     if (call && sameStation(call.location, to)) {
       const origin = calls[originIndex];
       if (!origin) return null;
-      return { origin, destination: call, between: calls.slice(originIndex + 1, i) };
+      return {
+        origin,
+        destination: call,
+        before: calls.slice(0, originIndex),
+        between: calls.slice(originIndex + 1, i),
+        after: calls.slice(i + 1),
+      };
     }
   }
   return null;
@@ -173,6 +189,19 @@ function lastRecordedCall(between: readonly ServiceCall[]): LastRecordedCall | n
   return null;
 }
 
+/** The first call with a recorded time, and how late it was there. */
+function firstRecordedCall(calls: readonly ServiceCall[]): LastRecordedCall | null {
+  for (const call of calls) {
+    const found = lastRecordedCall([call]);
+    if (found !== null) return found;
+  }
+  return null;
+}
+
+function hasRecordedTime(call: ServiceCall): boolean {
+  return call.actualArrival !== null || call.actualDeparture !== null;
+}
+
 export function classifyJourney(input: ClassifyInput): JourneyAssessment {
   const { record, from, to, today } = input;
   const date = record?.date ?? input.date;
@@ -192,6 +221,7 @@ export function classifyJourney(input: ClassifyInput): JourneyAssessment {
     // change sets. Declared once here so a new outcome cannot forget them.
     lastRecordedCall: null,
     onwardConnection: null,
+    carriedPast: null,
     change: null,
     via: null,
     operator: threshold.operator,
@@ -312,97 +342,197 @@ export function classifyJourney(input: ClassifyInput): JourneyAssessment {
     reasonCode,
   } as const;
 
+  /** "The first train ... reached {to} at ..." and what it assumes. */
+  const trainTakenNotes = (
+    train: OnwardConnection,
+    kind: 'on' | 'back' | 'instead',
+  ): readonly string[] => {
+    const lines: string[] = [];
+    const arrival =
+      `reached ${to} at ${displayClockTime(train.arrived)} - ` +
+      `${train.totalDelayMinutes} minutes after your booked arrival.`;
+    if (kind === 'instead') {
+      lines.push(
+        `The first train you could have caught instead left ${train.from} at ` +
+          `${displayClockTime(train.departed)}, ${train.waitMinutes} ` +
+          `${train.waitMinutes === 1 ? 'minute' : 'minutes'} after yours was due to leave, ` +
+          `and ${arrival}`,
+      );
+    } else {
+      lines.push(
+        `The first train ${kind === 'on' ? 'that could have carried you on' : 'back'} left ` +
+          `${train.from} at ${displayClockTime(train.departed)}, ` +
+          `${articleFor(train.waitMinutes)} ${train.waitMinutes}-minute wait, and ${arrival}`,
+      );
+      lines.push(
+        train.changeTimeFromTimetable
+          ? `That allows the timetable's ${train.changeMinutes}-minute change time ` +
+              `at ${train.from}.`
+          : `That allows ${train.changeMinutes} minutes to change at ${train.from}, ` +
+              "the usual minimum - this station's own change time is not on file.",
+      );
+      if (train.leftInsideChangeTime !== null) {
+        lines.push(
+          `A train also left at ${displayClockTime(train.leftInsideChangeTime)}, ` +
+            'too soon after you were set down to count as a connection. If you did ' +
+            'catch it, claim on that train instead.',
+        );
+      }
+    }
+    lines.push(
+      'Delay Repay claims are checked against the first train you could have ' +
+        'caught, so that is the train this is measured to. If you could not board ' +
+        'it - for example because it was too full - say so when you claim.',
+    );
+    return lines;
+  };
+
+  /** The note owed when a measured total came in under the threshold. */
+  const promptTrainNote = (train: OnwardConnection): readonly string[] =>
+    train.totalDelayMinutes >= threshold.minutes
+      ? []
+      : [
+          `That total is inside the ${threshold.minutes}-minute threshold, but only ` +
+            'because a train came along promptly. Check it against what you ' +
+            'remember before writing the journey off.',
+        ];
+
+  // A train that ran through the origin without calling could not be boarded.
+  // Recorded both before and after it is what separates that from a gap in the
+  // data at a train's first stop - it cannot skip where it starts.
+  if (
+    !hasRecordedTime(origin) &&
+    leg.before.some(hasRecordedTime) &&
+    [...leg.between, destination, ...leg.after].some(hasRecordedTime)
+  ) {
+    notes.push(
+      `This train was recorded before and after ${from} but not at ${from}, which ` +
+        'usually means it did not stop there and could not be boarded.',
+    );
+    notes.push(...reasonCodeNotes(reasonCode));
+    const onward = input.onwardConnection ?? null;
+    if (onward !== null) {
+      notes.push(...trainTakenNotes(onward, 'instead'), ...promptTrainNote(onward));
+    }
+    return {
+      ...shared,
+      delayMinutes: onward?.totalDelayMinutes ?? null,
+      onwardConnection: onward,
+      outcome: 'skipped-origin',
+      evidence: onward === null ? 'inferred-from-absent-times' : 'assumed-onward-connection',
+      looksClaimable: onward === null || onward.totalDelayMinutes >= threshold.minutes,
+      needsManualCheck: true,
+      notes,
+    };
+  }
+
   // Scheduled to arrive, but no arrival was ever recorded. HSP does not report
   // cancellations directly - this absence is the strongest signal there is, and
   // cancellations are a large share of real claims.
   if (scheduledArrivalMinutes !== null && actualArrivalMinutes === null) {
     // Before calling this a probable cancellation, look at where the train
-    // actually got to. A service that ran most of the route and then stopped
-    // short is not a cancellation, and the difference is the difference between
-    // a user being told "probably cancelled" and being told how late the train
-    // that abandoned them was.
+    // actually got to - before the destination, and after it. A service that
+    // stopped short, or ran past without calling, is not a cancellation, and
+    // the difference is the difference between a user being told "probably
+    // cancelled" and being told how late they really got in.
     const lastSeen = lastRecordedCall(leg.between);
+    const carriedTo = firstRecordedCall(leg.after);
 
-    if (lastSeen !== null) {
-      notes.push(
-        `This service ran but never called at ${to}. It was last recorded at ` +
-          `${lastSeen.location} at ${displayClockTime(lastSeen.time)}` +
-          (lastSeen.minutesLate === null
-            ? '.'
-            : `, ${describeLateness(lastSeen.minutesLate)} there.`),
-      );
-
-      const onward = input.onwardConnection ?? null;
-
-      if (onward !== null) {
+    if (lastSeen !== null || carriedTo !== null) {
+      if (lastSeen !== null) {
         notes.push(
-          `The first train that could have carried you on left ${onward.from} at ` +
-            `${displayClockTime(onward.departed)}, ` +
-            `${articleFor(onward.waitMinutes)} ${onward.waitMinutes}-minute wait, and ` +
-            `reached ${to} at ${displayClockTime(onward.arrived)} - ` +
-            `${onward.totalDelayMinutes} minutes after your booked arrival.`,
+          `This service ran but never called at ${to}. It was last recorded at ` +
+            `${lastSeen.location} at ${displayClockTime(lastSeen.time)}` +
+            (lastSeen.minutesLate === null
+              ? '.'
+              : `, ${describeLateness(lastSeen.minutesLate)} there.`),
         );
+      }
+      if (carriedTo !== null) {
         notes.push(
-          onward.changeTimeFromTimetable
-            ? `That allows the timetable's ${onward.changeMinutes}-minute change time ` +
-                `at ${onward.from}.`
-            : `That allows ${onward.changeMinutes} minutes to change at ${onward.from}, ` +
-                "the usual minimum - this station's own change time is not on file.",
+          (lastSeen === null
+            ? `This service ran past ${to} without calling there, with no stop before it ` +
+              'to get off at. '
+            : `It ran on past ${to} without calling there. `) +
+            `It was next recorded at ${carriedTo.location} at ` +
+            `${displayClockTime(carriedTo.time)}.`,
         );
-        if (onward.leftInsideChangeTime !== null) {
-          notes.push(
-            `A train also left at ${displayClockTime(onward.leftInsideChangeTime)}, ` +
-              'too soon after you were set down to count as a connection. If you did ' +
-              'catch it, claim on that train instead.',
-          );
-        }
+      }
+
+      // Getting off before the destination, or being carried past it: the
+      // data cannot say which, because it does not record when the change of
+      // plan was announced. Both are measured.
+      const gotOff = lastSeen === null ? null : (input.onwardConnection ?? null);
+      const carriedBack = carriedTo === null ? null : (input.carriedPastConnection ?? null);
+      const over = (train: OnwardConnection | null) =>
+        train !== null && train.totalDelayMinutes >= threshold.minutes;
+
+      if (gotOff === null && carriedBack === null) {
         notes.push(
-          'Delay Repay claims are checked against the first train you could have ' +
-            'caught, so that is the train this is measured to. If you could not board ' +
-            'it - for example because it was too full - say so when you claim.',
+          lastSeen !== null
+            ? `That figure is the delay at ${lastSeen.location}, not at ${to}. Your own ` +
+                'delay depends on how you completed the journey, which the performance ' +
+                'data cannot see - so work it out from when you actually arrived.'
+            : `Your own delay depends on how you got back to ${to}, which the ` +
+                'performance data cannot see - so work it out from when you actually arrived.',
         );
         notes.push(...reasonCodeNotes(reasonCode));
-
-        const overThreshold = onward.totalDelayMinutes >= threshold.minutes;
-        if (!overThreshold) {
-          notes.push(
-            `That total is inside the ${threshold.minutes}-minute threshold, but only ` +
-              'because a train came along promptly. Check it against what you ' +
-              'remember before writing the journey off.',
-          );
-        }
         return {
           ...shared,
-          // Now a real delay at the destination, so it belongs in delayMinutes -
-          // flagged by `evidence` as resting on the connection assumption.
-          delayMinutes: onward.totalDelayMinutes,
+          delayMinutes: null,
           lastRecordedCall: lastSeen,
-          onwardConnection: onward,
+          carriedPast: carriedTo === null ? null : { call: carriedTo, connection: null, reported: false },
           outcome: 'did-not-call',
-          evidence: 'assumed-onward-connection',
-          looksClaimable: overThreshold,
-          // Always. The connection is an assumption, so this never becomes a
-          // negative result the tool asserts on its own.
+          // The absent arrival is still an inference, but one made against
+          // recorded times rather than against silence.
+          evidence: 'inferred-from-absent-times',
+          looksClaimable: true,
           needsManualCheck: true,
           notes,
         };
       }
 
-      notes.push(
-        `That figure is the delay at ${lastSeen.location}, not at ${to}. Your own ` +
-          'delay depends on how you completed the journey, which the performance ' +
-          'data cannot see - so work it out from when you actually arrived.',
-      );
+      // Measured on getting off before, unless only being carried past is
+      // over the threshold - a possible claim is not dropped on a guess.
+      const reportCarried =
+        carriedBack !== null && (gotOff === null || (over(carriedBack) && !over(gotOff)));
+      const reported = (reportCarried ? carriedBack : gotOff) as OnwardConnection;
+      const other = reportCarried ? gotOff : carriedBack;
+
+      notes.push(...trainTakenNotes(reported, reportCarried ? 'back' : 'on'));
+      if (other !== null && lastSeen !== null && carriedTo !== null) {
+        notes.push(
+          reportCarried
+            ? `If the change of plan was announced in time for you to get off at ` +
+                `${lastSeen.location} instead, the first train on from there reached ${to} ` +
+                `at ${displayClockTime(other.arrived)}, ` +
+                `${describeLateness(other.totalDelayMinutes)} - inside the threshold. ` +
+                'Which applies depends on whether you could get off there.'
+            : `If you could not get off before ${to} and were carried on to ` +
+                `${carriedTo.location}, the first train back reached ${to} at ` +
+                `${displayClockTime(other.arrived)}, ${describeLateness(other.totalDelayMinutes)}` +
+                (over(other) ? '.' : ' - also inside the threshold.'),
+        );
+      }
       notes.push(...reasonCodeNotes(reasonCode));
+      notes.push(...promptTrainNote(reported));
+
       return {
         ...shared,
-        delayMinutes: null,
+        // Now a real delay at the destination, so it belongs in delayMinutes -
+        // flagged by `evidence` as resting on the connection assumption.
+        delayMinutes: reported.totalDelayMinutes,
         lastRecordedCall: lastSeen,
+        onwardConnection: reported,
+        carriedPast:
+          carriedTo === null
+            ? null
+            : { call: carriedTo, connection: carriedBack, reported: reportCarried },
         outcome: 'did-not-call',
-        // The absent arrival is still an inference, but one made against
-        // recorded times rather than against silence.
-        evidence: 'inferred-from-absent-times',
-        looksClaimable: true,
+        evidence: 'assumed-onward-connection',
+        looksClaimable: over(reported),
+        // Always. The connection is an assumption, so this never becomes a
+        // negative result the tool asserts on its own.
         needsManualCheck: true,
         notes,
       };
@@ -416,6 +546,23 @@ export function classifyJourney(input: ClassifyInput): JourneyAssessment {
         (neverDeparted ? ', and no departure was recorded either.' : '.'),
     );
     notes.push(...reasonCodeNotes(reasonCode));
+
+    // Cancelled: measured on the first train that left the origin after it.
+    const instead = neverDeparted ? (input.onwardConnection ?? null) : null;
+    if (instead !== null) {
+      notes.push(...trainTakenNotes(instead, 'instead'), ...promptTrainNote(instead));
+      return {
+        ...shared,
+        delayMinutes: instead.totalDelayMinutes,
+        onwardConnection: instead,
+        outcome: 'arrival-not-recorded',
+        evidence: 'assumed-onward-connection',
+        looksClaimable: instead.totalDelayMinutes >= threshold.minutes,
+        needsManualCheck: true,
+        notes,
+      };
+    }
+
     return {
       ...shared,
       delayMinutes: null,

@@ -53,6 +53,11 @@ export type JourneyOutcome =
    * claim of the pair.
    */
   | 'did-not-call'
+  /**
+   * The service ran through the origin without calling there - recorded before
+   * it and after it, but not at it - so it could not be boarded.
+   */
+  | 'skipped-origin'
   /** No matching service in HSP at all. */
   | 'service-not-found'
   /** Too recent for the data to be in yet. Nothing to conclude either way. */
@@ -73,6 +78,24 @@ export interface LastRecordedCall {
   readonly time: string;
   /** Minutes late at that station, or null if it could not be measured. */
   readonly minutesLate: number | null;
+}
+
+/**
+ * Where a service that ran past the destination without calling was next
+ * recorded, and the train back from there. The passenger may have been carried
+ * on to it if the change of plan came too late to get off before.
+ */
+export interface CarriedPast {
+  /** The first station after the destination with a recorded time. */
+  readonly call: LastRecordedCall;
+  /** The first train back from `call.location` to the destination, if one was found. */
+  readonly connection: OnwardConnection | null;
+  /**
+   * True when the result is measured on this, rather than on getting off before
+   * the destination - because only this one is over the threshold, or because
+   * there was nowhere before the destination to get off.
+   */
+  readonly reported: boolean;
 }
 
 export type Evidence =
@@ -117,6 +140,12 @@ export interface JourneyAssessment {
    * stopped short. Null whenever no assumption was made or none was found.
    */
   readonly onwardConnection: OnwardConnection | null;
+
+  /**
+   * Set when the service ran past the destination without calling there and
+   * was recorded after it. Null otherwise.
+   */
+  readonly carriedPast: CarriedPast | null;
 
   /**
    * The change, on a journey that has one. Null on a single-train journey.

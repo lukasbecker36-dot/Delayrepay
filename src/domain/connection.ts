@@ -76,6 +76,11 @@ export type ChangeCause =
   | 'connection-not-in-data'
   /** The planned connecting train left, but has no recorded arrival at the destination. */
   | 'connection-arrival-not-recorded'
+  /**
+   * The planned connecting train left, and was recorded running elsewhere, but
+   * never reached the destination - it stopped short or ran past.
+   */
+  | 'connection-did-not-reach'
   /** The connection was there to be caught; any delay happened on it. */
   | 'connection-late';
 
@@ -84,9 +89,17 @@ export type ChangeCause =
  * them there - the train they are measured as having caught instead.
  */
 export interface ReplacementLeg {
-  /** Why the first train did not get them to the change station. */
-  readonly reason: 'cancelled' | 'stopped-short';
-  /** Where it left them: the origin if it never ran, else the last station it was recorded at. */
+  /**
+   * Why the first train did not get them to the change station: it never ran,
+   * it ran through the origin without stopping, it stopped short, or it ran
+   * past the change station without calling.
+   */
+  readonly reason: 'cancelled' | 'skipped-origin' | 'stopped-short' | 'carried-past';
+  /**
+   * Where they were left: the origin if it never ran or never stopped there, the
+   * last station it was recorded at if it stopped short, the next station it
+   * was recorded at if it ran past.
+   */
   readonly station: string;
   /** From when they could leave that station, "HHMM". */
   readonly readyAt: string;
@@ -127,6 +140,12 @@ export interface ChangeAssessment {
    * that same window but have no recorded arrival at the destination.
    */
   readonly arrivalNotRecorded: readonly string[];
+  /**
+   * Scheduled departures, "HHMM", of trains that left the change station in
+   * that window and were recorded further on, but never reached the destination.
+   * Known not to be a way on, so never counted as a gap in the data.
+   */
+  readonly didNotReach: readonly string[];
   /**
    * The delay at the destination had every gap above run to time: missing
    * trains as timetabled, unrecorded arrivals as late as their departure.
@@ -183,6 +202,27 @@ function legCalls(
   if (index === -1 || !departure) return null;
   const arrival = record.calls.slice(index + 1).find((call) => sameStation(call.location, to));
   return arrival ? { departure, arrival } : null;
+}
+
+/**
+ * True when a train left `via`, has no arrival at `to`, and yet was recorded
+ * somewhere after leaving - so it ran, and did not get there. As opposed to a
+ * train whose arrival is simply missing from the data.
+ */
+function ranWithoutReaching(record: ServiceRecord, via: string, to: string): boolean {
+  const calls = legCalls(record, via, to);
+  if (calls === null || calls.departure.actualDeparture === null) return false;
+  if (calls.arrival.actualArrival !== null) return false;
+  const start = record.calls.indexOf(calls.departure);
+  return (
+    calls.arrival.actualDeparture !== null ||
+    record.calls
+      .slice(start + 1)
+      .some(
+        (call) =>
+          call !== calls.arrival && (call.actualArrival !== null || call.actualDeparture !== null),
+      )
+  );
 }
 
 /** This day's record of a timetabled train, matched on operator and times. */
@@ -269,6 +309,7 @@ export function assessChange(input: AssessChangeInput): ChangeAssessment | null 
       responsibleTocCode: firstLeg.tocCode,
       missingFromData: [],
       arrivalNotRecorded: [],
+      didNotReach: [],
       bestCaseDelayMinutes: null,
       replacement: null,
     };
@@ -306,9 +347,11 @@ export function assessChange(input: AssessChangeInput): ChangeAssessment | null 
       ? 'connection-not-in-data'
       : planned.actualDeparture === null
         ? 'connection-did-not-run'
-        : !plannedArrivalRecorded && !madePlannedConnection
-          ? 'connection-arrival-not-recorded'
-          : 'connection-late';
+        : plannedRecord !== null && ranWithoutReaching(plannedRecord, via, to)
+          ? 'connection-did-not-reach'
+          : !plannedArrivalRecorded && !madePlannedConnection
+            ? 'connection-arrival-not-recorded'
+            : 'connection-late';
   }
 
   const delayMinutes = caught?.totalDelayMinutes ?? null;
@@ -330,7 +373,7 @@ export function assessChange(input: AssessChangeInput): ChangeAssessment | null 
       inWindow(slot.scheduledDeparture) && findRecord(input.onward, slot, via, to) === null,
   );
 
-  const unrecordedArrivals = input.onward.filter((record) => {
+  const leftInWindowWithoutArriving = input.onward.filter((record) => {
     const calls = legCalls(record, via, to);
     return (
       calls !== null &&
@@ -339,6 +382,13 @@ export function assessChange(input: AssessChangeInput): ChangeAssessment | null 
       inWindow(calls.departure.actualDeparture)
     );
   });
+  // A train known to have run without getting there is not a gap to fill.
+  const didNotReach = leftInWindowWithoutArriving.filter((record) =>
+    ranWithoutReaching(record, via, to),
+  );
+  const unrecordedArrivals = leftInWindowWithoutArriving.filter(
+    (record) => !didNotReach.includes(record),
+  );
 
   // The best case: every gap filled as if it had run to time.
   let bestCaseDelayMinutes = delayMinutes;
@@ -372,6 +422,9 @@ export function assessChange(input: AssessChangeInput): ChangeAssessment | null 
     missingFromData: times(missingSlots.map((slot) => slot.scheduledDeparture)),
     arrivalNotRecorded: times(
       unrecordedArrivals.map((record) => legCalls(record, via, to)?.departure.scheduledDeparture ?? null),
+    ),
+    didNotReach: times(
+      didNotReach.map((record) => legCalls(record, via, to)?.departure.scheduledDeparture ?? null),
     ),
     bestCaseDelayMinutes,
     replacement: null,

@@ -727,3 +727,52 @@ describe('a journey with a change whose first train never reached the change', (
     expect(result.failures.some((f) => f.date === DAY && f.message.includes('no delay figure'))).toBe(true);
   });
 });
+
+describe('a direct train cancelled outright', () => {
+  const DAY = '2026-09-07';
+  const CANCELLED: ServiceRecord = {
+    rid: 'r-cancelled',
+    date: DAY,
+    tocCode: 'SN',
+    calls: [
+      { location: 'BTN', scheduledDeparture: '0715', scheduledArrival: null, actualDeparture: null, actualArrival: null, lateCancReason: '525' },
+      { location: 'VIC', scheduledDeparture: null, scheduledArrival: '0817', actualDeparture: null, actualArrival: null, lateCancReason: '525' },
+    ],
+  };
+  const NEXT: ServiceRecord = {
+    rid: 'r-next',
+    date: DAY,
+    tocCode: 'SN',
+    calls: [
+      { location: 'BTN', scheduledDeparture: '0745', scheduledArrival: null, actualDeparture: '0745', actualArrival: null, lateCancReason: null },
+      { location: 'VIC', scheduledDeparture: null, scheduledArrival: '0847', actualDeparture: null, actualArrival: '0850', lateCancReason: null },
+    ],
+  };
+
+  it('asks for trains from the origin from the booked departure, and scores the next one', async () => {
+    const queries: string[] = [];
+    const client = {
+      async serviceMetrics(query: { fromLocation: string; fromTime: string; toTime: string }) {
+        queries.push(`${query.fromLocation}@${query.fromTime}-${query.toTime}`);
+        if (query.fromTime === '0700') return [service(['r-cancelled'])];
+        return [service(['r-cancelled', 'r-next'], '0745')];
+      },
+      async serviceDetails(rid: string) {
+        if (rid === 'r-cancelled') return CANCELLED;
+        if (rid === 'r-next') return NEXT;
+        throw new HspError('unknown', `no fixture for ${rid}`);
+      },
+    } as unknown as HspClient;
+
+    const result = await runScan(client, { ...REQUEST, fromDate: DAY, toDate: DAY });
+    const journey = result.assessments[0];
+
+    // 07:15 booked, less 30 minutes, to 90 after.
+    expect(queries).toContain('BTN@0645-0845');
+    expect(journey?.outcome).toBe('arrival-not-recorded');
+    expect(journey?.onwardConnection?.rid).toBe('r-next');
+    // Booked into VIC at 08:17, in on the 07:45 at 08:50.
+    expect(journey?.delayMinutes).toBe(33);
+    expect(journey?.looksClaimable).toBe(true);
+  });
+});

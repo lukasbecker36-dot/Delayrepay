@@ -11,10 +11,10 @@ import { classifyJourney } from './domain/classify.js';
 import {
   classifyJourneyWithChange,
   pickReplacement,
-  replacementStart,
+  replacementStarts,
 } from './domain/classifyChange.js';
 import type { TimetabledConnection } from './domain/connection.js';
-import { resolveChangeTime } from './domain/changeTimes.js';
+import { resolveChangeTime, type ResolvedChangeTime } from './domain/changeTimes.js';
 import {
   pickOnwardConnection,
   LOOKBACK_MINUTES,
@@ -300,32 +300,54 @@ export async function runScan(
     }
   }
 
-  // Second pass. A journey that was abandoned partway is not finished being
-  // assessed: the delay that decides the claim is the one at the destination,
-  // and that depends on the train the user caught next. Only these journeys
-  // cost an extra lookup, and a failure here costs the connection rather than
-  // the result.
+  // Second pass. A journey whose train did not take the user to their
+  // destination is not finished being assessed: the delay that decides the
+  // claim is the one at the destination, and that depends on the train they
+  // caught instead. Only these journeys cost an extra lookup, and a failure
+  // here costs the total rather than the result. (Journeys with a change do
+  // this inside the change station lookups.)
   const resolved = await mapWithConcurrency(
     assessments,
     ONWARD_CONCURRENCY,
     async (assessment) => {
-      // A journey with a change that stopped short of the change station is
-      // reported as it stands; following it further is not built yet.
-      if (assessment.outcome !== 'did-not-call' || assessment.via !== null) return assessment;
+      if (assessment.via !== null) return assessment;
       const record = sourceRecords.get(assessment);
-      if (record === undefined) return assessment;
+      const bookedArrival = assessment.scheduledArrival;
+      if (record === undefined || bookedArrival === null) return assessment;
+
+      const lookup = (station: string, readyAt: string, fromOrigin: boolean) =>
+        findTrainFrom(client, request, {
+          date: assessment.date,
+          station,
+          readyAt,
+          bookedArrival,
+          excludeRid: record.rid,
+          // Someone whose train never left, or never stopped, is already on the platform.
+          changeTimeFor: (departingToc) =>
+            fromOrigin
+              ? { minutes: 0, fromTimetable: true }
+              : resolveChangeTime(station, record.tocCode, departingToc),
+        }, days, cache);
 
       try {
-        const onward = await findOnwardConnection(
-          client,
-          request,
-          assessment,
-          record,
-          days,
-          cache,
-        );
-        if (onward === null) return assessment;
-        return classifyFor(record, assessment.date, request, onward);
+        let onward: OnwardConnection | null = null;
+        let carried: OnwardConnection | null = null;
+
+        if (assessment.outcome === 'did-not-call') {
+          const setDown = assessment.lastRecordedCall;
+          if (setDown !== null) onward = await lookup(setDown.location, setDown.time, false);
+          const next = assessment.carriedPast?.call ?? null;
+          if (next !== null) carried = await lookup(next.location, next.time, false);
+        } else if (
+          assessment.scheduledDeparture !== null &&
+          (assessment.outcome === 'skipped-origin' ||
+            (assessment.outcome === 'arrival-not-recorded' && assessment.actualDeparture === null))
+        ) {
+          onward = await lookup(request.from, assessment.scheduledDeparture, true);
+        }
+
+        if (onward === null && carried === null) return assessment;
+        return classifyFor(record, assessment.date, request, onward, carried);
       } catch (error) {
         failures.push(toFailure(error, assessment.date, null));
         // The journey still stands, just without the total. Losing the
@@ -398,8 +420,11 @@ function classifyWithChange(
 interface Replacements {
   /** Each day's trains from where the first train left the user to the change station. */
   readonly candidatesByDate: ReadonlyMap<string, readonly ServiceRecord[]>;
-  /** When each such day's replacement was due at, and reached, the change station. */
-  readonly arrivals: ReadonlyMap<string, { readonly scheduled: number; readonly actual: number }>;
+  /**
+   * When each such day's first train was due at the change station, and when
+   * each possible replacement got there - more than one when it ran past.
+   */
+  readonly arrivals: ReadonlyMap<string, { readonly scheduled: number; readonly actuals: readonly number[] }>;
   readonly failures: readonly ScanFailure[];
 }
 
@@ -420,62 +445,74 @@ async function fetchReplacements(
   cache: ResponseCache,
 ): Promise<Replacements> {
   const candidatesByDate = new Map<string, ServiceRecord[]>();
-  const arrivals = new Map<string, { scheduled: number; actual: number }>();
+  const arrivals = new Map<string, { scheduled: number; actuals: number[] }>();
   const failures: ScanFailure[] = [];
 
   for (const [date, records] of firstTrains) {
     for (const record of records) {
-      const start = replacementStart(record, request.from, via, date, request.today);
       const due = arrivalAt(record, request.from, via).scheduled;
-      const ready = parseClockTime(start?.readyAt);
-      if (start === null || due === null || ready === null) continue;
+      if (due === null) continue;
 
-      const fromMinutes = ready - LOOKBACK_MINUTES;
-      const toMinutes = ready + MAX_WAIT_MINUTES + CHANGE_TIME_HEADROOM_MINUTES;
-      if (fromMinutes < 0 || toMinutes >= 1440) continue;
+      for (const start of replacementStarts(record, request.from, via, date, request.today)) {
+        const ready = parseClockTime(start.readyAt);
+        if (ready === null) continue;
+        const fromMinutes = ready - LOOKBACK_MINUTES;
+        const toMinutes = ready + MAX_WAIT_MINUTES + CHANGE_TIME_HEADROOM_MINUTES;
+        if (fromMinutes < 0 || toMinutes >= 1440) continue;
 
-      try {
-        const matches = await fetchMetricsBand(
-          client,
-          { ...request, from: start.station, to: via, fromDate: date, toDate: date, scheduledDeparture: null },
-          fromMinutes,
-          toMinutes,
-          days,
-          cache,
-        );
-        const rids = [
-          ...new Set(
-            matches
-              .filter((match) => !CONNECTION_OPERATORS_LEFT_OUT.includes((match.tocCode ?? '').toUpperCase()))
-              .flatMap((match) => match.rids)
-              .filter((rid) => rid !== record.rid && (ridDate(rid) === null || ridDate(rid) === date)),
-          ),
-        ];
-        const candidates = (
-          await mapWithConcurrency(rids, DETAIL_CONCURRENCY, (rid) =>
-            fetchDetails(client, rid, request.today, cache),
-          )
-        ).filter((candidate) => candidate.date === date);
+        try {
+          const matches = await fetchMetricsBand(
+            client,
+            { ...request, from: start.station, to: via, fromDate: date, toDate: date, scheduledDeparture: null },
+            fromMinutes,
+            toMinutes,
+            days,
+            cache,
+          );
+          const rids = [
+            ...new Set(
+              matches
+                .filter((match) => !CONNECTION_OPERATORS_LEFT_OUT.includes((match.tocCode ?? '').toUpperCase()))
+                .flatMap((match) => match.rids)
+                .filter((rid) => rid !== record.rid && (ridDate(rid) === null || ridDate(rid) === date)),
+            ),
+          ];
+          const found = (
+            await mapWithConcurrency(rids, DETAIL_CONCURRENCY, (rid) =>
+              fetchDetails(client, rid, request.today, cache),
+            )
+          ).filter((candidate) => candidate.date === date);
 
-        candidatesByDate.set(date, candidates);
-        const leg = pickReplacement({
-          start,
-          candidates,
-          via,
-          bookedArrivalAtVia: formatClockTime(due),
-          firstTocCode: record.tocCode,
-          changeTimeAt: resolveChangeTime,
-        });
-        const actual = parseClockTime(leg?.train.arrived);
-        if (actual !== null) arrivals.set(date, { scheduled: due, actual });
-      } catch (error) {
-        const failure = toFailure(error, date, null);
-        failures.push({
-          ...failure,
-          message:
-            `The trains from ${start.station} to ${via} after your train could not be read, ` +
-            `so this journey has no delay figure. ${failure.message}`,
-        });
+          // One pool per day: each train is only ever picked from a station it calls at.
+          const pool = candidatesByDate.get(date) ?? [];
+          for (const candidate of found) {
+            if (!pool.some((known) => known.rid === candidate.rid)) pool.push(candidate);
+          }
+          candidatesByDate.set(date, pool);
+
+          const leg = pickReplacement({
+            start,
+            candidates: found,
+            via,
+            bookedArrivalAtVia: formatClockTime(due),
+            firstTocCode: record.tocCode,
+            changeTimeAt: resolveChangeTime,
+          });
+          const actual = parseClockTime(leg?.train.arrived);
+          if (actual !== null) {
+            const known = arrivals.get(date) ?? { scheduled: due, actuals: [] };
+            known.actuals.push(actual);
+            arrivals.set(date, known);
+          }
+        } catch (error) {
+          const failure = toFailure(error, date, null);
+          failures.push({
+            ...failure,
+            message:
+              `The trains from ${start.station} to ${via} after your train could not be read, ` +
+              `so this journey may have no delay figure. ${failure.message}`,
+          });
+        }
       }
     }
   }
@@ -551,7 +588,7 @@ async function fetchConnections(
   days: DayType,
   cache: ResponseCache,
   /** Arrivals at the change station on replacement trains, for days the first train never got there. */
-  replacementArrivals: ReadonlyMap<string, { scheduled: number; actual: number }> = new Map(),
+  replacementArrivals: ReadonlyMap<string, { readonly scheduled: number; readonly actuals: readonly number[] }> = new Map(),
 ): Promise<Connections> {
   const failures: ScanFailure[] = [];
   const failedDates = new Set<string>();
@@ -562,17 +599,17 @@ async function fetchConnections(
   };
 
   // When each day's first train was due in, and when it got there.
-  const arrivals = new Map<string, { scheduled: number; actual: number }>();
+  const arrivals = new Map<string, { scheduled: number; actuals: readonly number[] }>();
   let planned: number | null = null;
   for (const [date, records] of firstTrains) {
     for (const record of records) {
       const { scheduled, actual } = arrivalAt(record, request.from, via);
       if (scheduled !== null) planned ??= scheduled;
-      if (scheduled !== null && actual !== null) arrivals.set(date, { scheduled, actual });
+      if (scheduled !== null && actual !== null) arrivals.set(date, { scheduled, actuals: [actual] });
     }
   }
   for (const [date, arrival] of replacementArrivals) {
-    if (!arrivals.has(date)) arrivals.set(date, arrival);
+    if (!arrivals.has(date) && arrival.actuals.length > 0) arrivals.set(date, arrival);
   }
   const empty: Connections = { timetable: [], onwardByDate: new Map(), failedDates, failures };
   if (planned === null) return empty;
@@ -581,8 +618,9 @@ async function fetchConnections(
   // for trains booked earlier and running late, to the longest wait after the
   // latest - but never past the horizon.
   const horizon = planned + CONNECTION_HORIZON_MINUTES;
-  const earliest = Math.min(planned, ...[...arrivals.values()].map((a) => a.actual));
-  const latest = Math.max(planned, ...[...arrivals.values()].map((a) => a.actual));
+  const allActuals = [...arrivals.values()].flatMap((a) => a.actuals);
+  const earliest = Math.min(planned, ...allActuals);
+  const latest = Math.max(planned, ...allActuals);
   const fromMinutes = earliest - LOOKBACK_MINUTES;
   const toMinutes = Math.min(
     latest + MAX_WAIT_MINUTES + CHANGE_TIME_HEADROOM_MINUTES,
@@ -630,9 +668,9 @@ async function fetchConnections(
   // For each day, only the trains that could matter: booked from a little
   // before the first train got in, to the longest wait after.
   const wanted = new Map<string, Set<string>>();
-  for (const [date, { scheduled, actual }] of arrivals) {
-    const opens = actual - LOOKBACK_MINUTES;
-    const closes = Math.max(actual, scheduled) + MAX_WAIT_MINUTES + CHANGE_TIME_HEADROOM_MINUTES;
+  for (const [date, { scheduled, actuals }] of arrivals) {
+    const opens = Math.min(...actuals) - LOOKBACK_MINUTES;
+    const closes = Math.max(...actuals, scheduled) + MAX_WAIT_MINUTES + CHANGE_TIME_HEADROOM_MINUTES;
     if (closes > horizon) {
       failDate(date, `The first train reached ${via} too late for its connections to be checked.`);
       continue;
@@ -686,6 +724,7 @@ function classifyFor(
   date: string,
   request: ScanRequest,
   onwardConnection: OnwardConnection | null = null,
+  carriedPastConnection: OnwardConnection | null = null,
 ): JourneyAssessment {
   return classifyJourney({
     record,
@@ -695,50 +734,55 @@ function classifyFor(
     today: request.today,
     dataMayBeIncomplete: daysBetween(date, request.today) < DATA_SETTLING_DAYS,
     onwardConnection,
+    carriedPastConnection,
     ...(request.thresholdMinutes == null ? {} : { thresholdMinutes: request.thresholdMinutes }),
   });
 }
 
 /**
- * Finds the train that carried the user on after their own stopped short.
+ * The first train that actually left `station` for the destination once the
+ * user could board it - after their own stopped short, ran past, or never ran.
  *
- * Classification happens twice for these journeys: once to discover that the
- * service was abandoned and where, then - knowing which station to ask about -
- * again with the connection supplied. Re-running the classifier is free and
- * pure, and it keeps every sentence about the journey being decided in one
- * place rather than patched on afterwards.
+ * Classification happens twice for these journeys: once to discover what
+ * happened and where, then - knowing which station to ask about - again with
+ * the train supplied. Re-running the classifier is free and pure, and it keeps
+ * every sentence about the journey being decided in one place rather than
+ * patched on afterwards.
  */
-async function findOnwardConnection(
+async function findTrainFrom(
   client: HspClient,
   request: ScanRequest,
-  assessment: JourneyAssessment,
-  record: ServiceRecord,
+  from: {
+    readonly date: string;
+    readonly station: string;
+    /** When the user could board, "HHMM". */
+    readonly readyAt: string;
+    /** The original train's booked arrival at the destination, "HHMM". */
+    readonly bookedArrival: string;
+    /** The user's own train, never a way on. */
+    readonly excludeRid: string;
+    readonly changeTimeFor: (departingToc: string | null) => ResolvedChangeTime;
+  },
   days: DayType,
   cache: ResponseCache,
 ): Promise<OnwardConnection | null> {
-  const setDown = assessment.lastRecordedCall;
-  const bookedArrival = assessment.scheduledArrival;
-  if (setDown === null || bookedArrival === null) return null;
-
-  const setDownMinutes = parseClockTime(setDown.time);
-  if (setDownMinutes === null) return null;
+  const ready = parseClockTime(from.readyAt);
+  if (ready === null) return null;
 
   // A band that runs backwards over midnight is not something serviceMetrics
   // can answer. Rather than send a query whose meaning we cannot predict, skip
   // the lookup and leave the journey reported without a connection.
-  if (setDownMinutes - LOOKBACK_MINUTES < 0 || setDownMinutes + MAX_WAIT_MINUTES >= 1440) {
-    return null;
-  }
+  if (ready - LOOKBACK_MINUTES < 0 || ready + MAX_WAIT_MINUTES >= 1440) return null;
 
   const matches = await fetchMetrics(
     client,
     {
-      from: setDown.location,
+      from: from.station,
       to: request.to,
-      fromDate: assessment.date,
-      toDate: assessment.date,
-      fromTime: formatClockTime(setDownMinutes - LOOKBACK_MINUTES),
-      toTime: formatClockTime(setDownMinutes + MAX_WAIT_MINUTES),
+      fromDate: from.date,
+      toDate: from.date,
+      fromTime: formatClockTime(ready - LOOKBACK_MINUTES),
+      toTime: formatClockTime(ready + MAX_WAIT_MINUTES),
       scheduledDeparture: null,
       today: request.today,
       thresholdMinutes: request.thresholdMinutes ?? null,
@@ -748,21 +792,23 @@ async function findOnwardConnection(
   );
 
   const rids = [...new Set(matches.flatMap((match) => match.rids))].filter(
-    (rid) => rid !== record.rid,
+    (rid) => rid !== from.excludeRid,
   );
 
-  const candidates = await mapWithConcurrency(rids, DETAIL_CONCURRENCY, async (rid) =>
-    fetchDetails(client, rid, request.today, cache),
-  );
+  // Only trains that ran that day: a way on the next morning is not a way on.
+  const candidates = (
+    await mapWithConcurrency(rids, DETAIL_CONCURRENCY, async (rid) =>
+      fetchDetails(client, rid, request.today, cache),
+    )
+  ).filter((candidate) => candidate.date === from.date);
 
   return pickOnwardConnection({
     candidates,
-    from: setDown.location,
+    from: from.station,
     to: request.to,
-    setDownAt: setDown.time,
-    bookedArrival,
-    changeTimeFor: (departingToc) =>
-      resolveChangeTime(setDown.location, record.tocCode, departingToc),
+    setDownAt: from.readyAt,
+    bookedArrival: from.bookedArrival,
+    changeTimeFor: from.changeTimeFor,
   });
 }
 

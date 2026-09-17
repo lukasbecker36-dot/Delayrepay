@@ -488,3 +488,122 @@ describe('a first train that never reached the change station', () => {
     expect(result.notes.join(' ')).not.toContain('No train from HSK');
   });
 });
+
+describe('more ways a first train fails to reach the change station', () => {
+  function toClapham(rid: string, from: string, departed: string, arrived: string): ServiceRecord {
+    return {
+      rid,
+      date: DATE,
+      tocCode: 'SN',
+      calls: [
+        call(from, { scheduledDeparture: departed, actualDeparture: departed }),
+        call('CLJ', { scheduledArrival: arrived, actualArrival: arrived }),
+      ],
+    };
+  }
+
+  const judge = (first: ServiceRecord, candidates: readonly ServiceRecord[]) =>
+    classifyJourneyWithChange({
+      record: first,
+      from: 'HSK',
+      via: 'CLJ',
+      to: 'SPB',
+      date: DATE,
+      today: TODAY,
+      timetable: TIMETABLE,
+      onward: TIMETABLE.map((slot) => ran(slot)),
+      changeTimeFor: CLAPHAM,
+      replacementCandidates: candidates,
+      changeTimeAt: () => ({ minutes: 3, fromTimetable: true }),
+    });
+
+  it('treats a first train that did not stop at the origin as not boardable, even if it reached the change', () => {
+    const skipped: ServiceRecord = {
+      rid: 'first',
+      date: DATE,
+      tocCode: 'SN',
+      calls: [
+        call('BTN', { scheduledDeparture: '0650', actualDeparture: '0650' }),
+        call('HSK', { scheduledDeparture: '0703' }),
+        call('CLJ', { scheduledArrival: '0752', actualArrival: '0752' }),
+      ],
+    };
+    const result = judge(skipped, [toClapham('next', 'HSK', '0733', '0822')]);
+    expect(result.change?.replacement?.reason).toBe('skipped-origin');
+    expect(result.change?.replacement?.train.rid).toBe('next');
+    expect(describeOutcome(result)).toContain('Your train did not stop at HSK');
+  });
+
+  // Hassocks, Haywards Heath (in 07:10), then fast through CLJ to Victoria (08:00).
+  const ranPastClapham: ServiceRecord = {
+    rid: 'first',
+    date: DATE,
+    tocCode: 'SN',
+    calls: [
+      call('HSK', { scheduledDeparture: '0703', actualDeparture: '0703' }),
+      call('HHE', { scheduledArrival: '0709', actualArrival: '0710' }),
+      call('CLJ', { scheduledArrival: '0752' }),
+      call('VIC', { scheduledArrival: '0800', actualArrival: '0800' }),
+    ],
+  };
+  const backFromVictoria = toClapham('back', 'VIC', '0810', '0818');
+
+  it('measures getting off before the change when both ways are over the threshold, and names the other', () => {
+    const result = judge(ranPastClapham, [toClapham('from-hhe', 'HHE', '0720', '0804'), backFromVictoria]);
+    expect(result.change?.replacement?.reason).toBe('stopped-short');
+    expect(result.delayMinutes).toBe(28);
+    expect(result.notes.join(' ')).toContain('carried on to VIC, you would have reached SPB 28 minutes late.');
+  });
+
+  it('measures being carried past the change when only that is over the threshold', () => {
+    // Off at HHE: the 07:14 is in by 07:52, in time for the planned 08:11.
+    // Carried to VIC: back into CLJ at 08:18, too late for it - the 08:38 it is.
+    const result = judge(ranPastClapham, [toClapham('from-hhe', 'HHE', '0714', '0752'), backFromVictoria]);
+    expect(result.change?.replacement?.reason).toBe('carried-past');
+    expect(result.delayMinutes).toBe(28);
+    expect(result.looksClaimable).toBe(true);
+    expect(describeOutcome(result)).toContain('Your train ran past CLJ without stopping');
+    const notes = result.notes.join(' ');
+    expect(notes).toContain('ran past CLJ without calling there. It was next recorded at VIC at 08:00');
+    expect(notes).toContain('The first train back from there left VIC at 08:10');
+    expect(notes).toContain('in time for you to get off at HHE instead, you would have reached SPB on time');
+  });
+});
+
+describe('a connecting train that left but never reached the destination', () => {
+  /** The 08:11 Overground, recorded at Kensington Olympia and then never at SPB. */
+  const stoppedShortAtKpa: ServiceRecord = {
+    rid: 'LO-0811',
+    date: DATE,
+    tocCode: 'LO',
+    calls: [
+      call('CLJ', { scheduledDeparture: '0811', actualDeparture: '0811' }),
+      call('KPA', { scheduledArrival: '0820', actualArrival: '0820' }),
+      call('SPB', { scheduledArrival: '0824' }),
+    ],
+  };
+
+  it('is named as not reaching the destination, and not filled in as a gap in the data', () => {
+    const result = assess(firstTrain('0752'), [ran(LO_0758), stoppedShortAtKpa, ran(SN_0838)]);
+    expect(result?.cause).toBe('connection-did-not-reach');
+    expect(result?.didNotReach).toEqual(['0811']);
+    expect(result?.arrivalNotRecorded).toEqual([]);
+    expect(result?.delayMinutes).toBe(28);
+    expect(result?.bestCaseDelayMinutes).toBe(28);
+  });
+
+  it('says so in the result', () => {
+    const result = classify(firstTrain('0752'), [ran(LO_0758), stoppedShortAtKpa, ran(SN_0838)]);
+    expect(result.outcome).not.toBe('unconfirmed');
+    expect(result.notes.join(' ')).toContain('The 08:11 to SPB left at 08:11 but did not reach SPB');
+  });
+
+  it('names another train that left in time but did not get there', () => {
+    // In at 08:05, too late for the 08:11 anyway; the note is about it not being a way on.
+    const result = classify(firstTrain('0805'), [ran(LO_0758), stoppedShortAtKpa, ran(SN_0838)]);
+    expect(result.change?.cause).toBe('first-train-late');
+    expect(result.notes.join(' ')).toContain(
+      'The train from CLJ at 08:11 left but did not reach SPB, so it is not counted as a way on.',
+    );
+  });
+});

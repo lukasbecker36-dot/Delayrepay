@@ -78,7 +78,21 @@ const SKIPPED_ORIGIN = assess([
   call('VIC', { scheduledArrival: '0817', actualArrival: '0820' }),
 ]);
 
-const EVERY_OUTCOME = [DELAYED, CANCELLED, DID_NOT_CALL, ON_TIME, NOT_FOUND, AWAITING, SKIPPED_ORIGIN];
+const DEPARTED_THEN_VANISHED = assess([
+  call('BTN', { scheduledDeparture: '0715', actualDeparture: '0716' }),
+  call('VIC', { scheduledArrival: '0817' }),
+]);
+
+const EVERY_OUTCOME = [
+  DELAYED,
+  CANCELLED,
+  DEPARTED_THEN_VANISHED,
+  DID_NOT_CALL,
+  ON_TIME,
+  NOT_FOUND,
+  AWAITING,
+  SKIPPED_ORIGIN,
+];
 
 /** A train measured on the way on, so the sentences that quote a total are checked too. */
 const WAY_ON = {
@@ -230,6 +244,7 @@ describe('the words the tool is allowed to use', () => {
       new Set([
         'delayed',
         'arrival-not-recorded',
+        'cancelled',
         'did-not-call',
         'within-threshold',
         'service-not-found',
@@ -343,9 +358,10 @@ describe('describeExpiry', () => {
 
 describe('summariseScan', () => {
   it('is one message covering everything, not one per journey', () => {
-    // Delayed, cancelled, stopped short, and a train that did not stop at the origin.
+    // Delayed, cancelled, left and vanished, stopped short, and a train that did
+    // not stop at the origin.
     const summary = summariseScan(EVERY_OUTCOME);
-    expect(summary).toContain('4 journeys look claimable');
+    expect(summary).toContain('5 journeys look claimable');
     expect(summary).toContain('could not be checked');
     expect(summary).toContain('too recent to check yet');
   });

@@ -538,31 +538,39 @@ export function classifyJourney(input: ClassifyInput): JourneyAssessment {
       };
     }
 
-    const neverDeparted = parseClockTime(origin.actualDeparture) === null;
-    notes.push(
-      'No arrival was recorded for this service. The performance data does not ' +
-        'report cancellations directly, so a missing arrival is the closest signal ' +
-        'there is' +
-        (neverDeparted ? ', and no departure was recorded either.' : '.'),
-    );
-    notes.push(...reasonCodeNotes(reasonCode));
+    // No time recorded anywhere from the origin on: treated as cancelled, by
+    // decision (CLAUDE.md). A train that ran leaves times behind; one that left
+    // the origin and then vanished did not get this far, and is handled below.
+    if (![origin, ...leg.between, destination, ...leg.after].some(hasRecordedTime)) {
+      notes.push(
+        `No times were recorded for this train from ${from} onwards, so it is treated ` +
+          'as cancelled.',
+      );
+      notes.push(...reasonCodeNotes(reasonCode));
 
-    // Cancelled: measured on the first train that left the origin after it.
-    const instead = neverDeparted ? (input.onwardConnection ?? null) : null;
-    if (instead !== null) {
-      notes.push(...trainTakenNotes(instead, 'instead'), ...promptTrainNote(instead));
+      // Measured on the first train that left the origin after it was due.
+      const instead = input.onwardConnection ?? null;
+      if (instead !== null) {
+        notes.push(...trainTakenNotes(instead, 'instead'), ...promptTrainNote(instead));
+      }
       return {
         ...shared,
-        delayMinutes: instead.totalDelayMinutes,
+        delayMinutes: instead?.totalDelayMinutes ?? null,
         onwardConnection: instead,
-        outcome: 'arrival-not-recorded',
-        evidence: 'assumed-onward-connection',
-        looksClaimable: instead.totalDelayMinutes >= threshold.minutes,
+        outcome: 'cancelled',
+        evidence: instead === null ? 'inferred-from-absent-times' : 'assumed-onward-connection',
+        looksClaimable: instead === null || instead.totalDelayMinutes >= threshold.minutes,
+        // The train caught instead is an assumption, as on every other way on.
         needsManualCheck: true,
         notes,
       };
     }
 
+    notes.push(
+      `This train left ${from} but no arrival was recorded for it, and it was not ` +
+        'recorded anywhere after. The performance data does not say what happened to it.',
+    );
+    notes.push(...reasonCodeNotes(reasonCode));
     return {
       ...shared,
       delayMinutes: null,

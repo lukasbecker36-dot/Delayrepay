@@ -11,7 +11,7 @@
  * have been caught - the passenger is measured on the first train that actually
  * left for the change station from where they were left:
  *
- * - cancelled (no departure recorded at the origin), or ran through the origin
+ * - cancelled (no time recorded from the origin on), or ran through the origin
  *   without stopping: from the origin, at the first train's booked departure,
  *   with no change time - they were already on the platform;
  * - stopped short: from the last station it was recorded at, at the time it was
@@ -130,11 +130,7 @@ export function replacementStarts(
     }
     return starts;
   }
-  if (
-    firstLeg.outcome === 'arrival-not-recorded' &&
-    firstLeg.actualDeparture === null &&
-    firstLeg.scheduledDeparture !== null
-  ) {
+  if (firstLeg.outcome === 'cancelled' && firstLeg.scheduledDeparture !== null) {
     return [{ reason: 'cancelled', station: from, readyAt: firstLeg.scheduledDeparture }];
   }
   return [];
@@ -343,7 +339,8 @@ function replacementNotes(
   if (replacement.reason === 'cancelled' || replacement.reason === 'skipped-origin') {
     notes.push(
       replacement.reason === 'cancelled'
-        ? 'No departure was recorded for this train, which usually means it was cancelled.'
+        ? `No times were recorded for this train from ${replacement.station} onwards, so it ` +
+            'is treated as cancelled.'
         : `This train was recorded before and after ${replacement.station} but not at ` +
             `${replacement.station}, which usually means it did not stop there and could ` +
             'not be boarded.',

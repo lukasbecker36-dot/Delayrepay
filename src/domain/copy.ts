@@ -51,6 +51,8 @@ function replacementLead(from: string, via: string, reason: string): string {
   switch (reason) {
     case 'skipped-origin':
       return `Your train did not stop at ${from}`;
+    case 'cancelled':
+      return 'Your train was cancelled';
     case 'carried-past':
       return `Your train ran past ${via} without stopping`;
     default:
@@ -94,6 +96,13 @@ export function describeOutcome(assessment: JourneyAssessment): string {
         `${measured}, at or over the ` +
         `${assessment.thresholdMinutes}-minute threshold. This looks claimable.`
       );
+    case 'cancelled':
+      return (
+        'This train was cancelled. ' +
+        (assessment.onwardConnection === null
+          ? 'This looks claimable.'
+          : nextTrainSentence(assessment, assessment.onwardConnection, 'On the next train'))
+      );
     case 'arrival-not-recorded':
       if (assessment.change !== null) {
         return (
@@ -101,14 +110,8 @@ export function describeOutcome(assessment: JourneyAssessment): string {
           'recorded after this one got there. This looks claimable.'
         );
       }
-      if (assessment.onwardConnection !== null) {
-        return (
-          'No arrival recorded, which usually means the service was cancelled. ' +
-          nextTrainSentence(assessment, assessment.onwardConnection, 'On the next train')
-        );
-      }
       return (
-        'No arrival recorded, which usually means the service was cancelled. ' +
+        'This train left but no arrival was recorded, so how late it got in is not known. ' +
         'This looks claimable.'
       );
     case 'skipped-origin':

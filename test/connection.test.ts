@@ -358,7 +358,7 @@ describe('scoring a journey with a change', () => {
 
   it('judges a first train that never reached the change on its own, naming the change station', () => {
     const cancelled = classify(firstTrain(null, null), TIMETABLE.map((slot) => ran(slot)));
-    expect(cancelled.outcome).toBe('arrival-not-recorded');
+    expect(cancelled.outcome).toBe('cancelled');
     expect(cancelled.to).toBe('SPB');
     expect(cancelled.via).toBe('CLJ');
     expect(cancelled.notes.join(' ')).toContain('connection there to SPB could not be assessed');
@@ -430,10 +430,10 @@ describe('a first train that never reached the change station', () => {
     expect(result.evidence).toBe('assumed-onward-connection');
 
     const notes = result.notes.join(' ');
-    expect(notes).toContain('No departure was recorded for this train');
+    expect(notes).toContain('No times were recorded for this train from HSK onwards, so it is treated as cancelled');
     expect(notes).toContain('left HSK at 07:33, 30 minutes after yours was due to leave');
     expect(notes).toContain('That train reached CLJ at 08:22');
-    expect(describeOutcome(result)).toContain('Your train did not reach CLJ; on the next trains you would have arrived at SPB 28 minutes late');
+    expect(describeOutcome(result)).toContain('Your train was cancelled; on the next trains you would have arrived at SPB 28 minutes late');
   });
 
   it('counts a late-running earlier train that left after the cancelled one was due', () => {
@@ -475,7 +475,7 @@ describe('a first train that never reached the change station', () => {
 
   it('says so when no train from there was recorded, and keeps the journey flagged', () => {
     const result = classifyWithReplacements(firstTrain(null, null), []);
-    expect(result.outcome).toBe('arrival-not-recorded');
+    expect(result.outcome).toBe('cancelled');
     expect(result.looksClaimable).toBe(true);
     expect(result.change).toBeNull();
     expect(result.notes.join(' ')).toContain('No train from HSK to CLJ was recorded leaving within 90 minutes of 07:03');
@@ -483,7 +483,7 @@ describe('a first train that never reached the change station', () => {
 
   it('reports the journey as before when the trains from there were not looked up', () => {
     const result = classifyWithReplacements(firstTrain(null, null), null);
-    expect(result.outcome).toBe('arrival-not-recorded');
+    expect(result.outcome).toBe('cancelled');
     expect(result.notes.join(' ')).toContain('could not be assessed');
     expect(result.notes.join(' ')).not.toContain('No train from HSK');
   });

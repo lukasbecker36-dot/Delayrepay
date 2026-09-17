@@ -152,7 +152,7 @@ destination, on a single train and on either side of a change:
 
 | What the data shows | Measured from |
 | --- | --- |
-| No departure or arrival recorded (cancelled) | the origin, at the booked departure, no change time |
+| No time recorded anywhere from the origin on (**cancelled**) | the origin, at the booked departure, no change time |
 | Recorded before and after the origin but not at it (did not stop there) | the origin, at the booked departure, no change time |
 | Last recorded before the destination, never after (stopped short) | that station, at the time recorded, plus its change time |
 | Recorded after the destination but not at it (ran past without calling) | **both** the last station before, and the next station after (a train back) |
@@ -163,6 +163,12 @@ answer: was the change of plan announced in time to get off before it, or was
 the passenger carried on? Both are measured. The result uses getting off
 before, unless only being carried on is over the threshold - a possible claim
 is not dropped on a guess - and a note gives the other figure.
+
+**A train with no recorded times is cancelled.** Decided 2026-09-17: when
+nothing is recorded for it from the origin on - not there, not at any stop
+after - the result says it was cancelled rather than hedging. A train that ran
+leaves times behind. One that left the origin and was never recorded again is
+not called cancelled; the data does not say what happened to it.
 
 A train at the start of its run with no departure recorded, but recorded
 later, is a gap in the data, not a skipped stop: a train cannot skip where it

@@ -148,7 +148,7 @@ describe('a scan over a working week', () => {
     expect(byDate['2026-09-07']?.outcome).toBe('within-threshold');
     expect(byDate['2026-09-08']?.outcome).toBe('delayed');
     expect(byDate['2026-09-08']?.delayMinutes).toBe(34);
-    expect(byDate['2026-09-09']?.outcome).toBe('arrival-not-recorded');
+    expect(byDate['2026-09-09']?.outcome).toBe('cancelled');
     expect(byDate['2026-09-10']?.outcome).toBe('delayed');
     expect(byDate['2026-09-11']?.outcome).toBe('service-not-found');
   });
@@ -722,7 +722,7 @@ describe('a journey with a change whose first train never reached the change', (
     const result = await runScan(client, request);
     const journey = result.assessments[0];
 
-    expect(journey?.outcome).toBe('arrival-not-recorded');
+    expect(journey?.outcome).toBe('cancelled');
     expect(journey?.looksClaimable).toBe(true);
     expect(result.failures.some((f) => f.date === DAY && f.message.includes('no delay figure'))).toBe(true);
   });
@@ -769,7 +769,7 @@ describe('a direct train cancelled outright', () => {
 
     // 07:15 booked, less 30 minutes, to 90 after.
     expect(queries).toContain('BTN@0645-0845');
-    expect(journey?.outcome).toBe('arrival-not-recorded');
+    expect(journey?.outcome).toBe('cancelled');
     expect(journey?.onwardConnection?.rid).toBe('r-next');
     // Booked into VIC at 08:17, in on the 07:45 at 08:50.
     expect(journey?.delayMinutes).toBe(33);

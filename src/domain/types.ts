@@ -40,6 +40,12 @@ export type JourneyOutcome =
   | 'unconfirmed'
   /** Arrived late by at least the threshold. */
   | 'delayed'
+  /**
+   * No time recorded anywhere from the origin on - not there, not at any stop
+   * after it. Treated as cancelled, by decision: HSP never says "cancelled",
+   * and a train that ran leaves times behind.
+   */
+  | 'cancelled'
   /** Scheduled to arrive, no arrival recorded. Often a cancellation. */
   | 'arrival-not-recorded'
   /**

@@ -340,8 +340,7 @@ export async function runScan(
           if (next !== null) carried = await lookup(next.location, next.time, false);
         } else if (
           assessment.scheduledDeparture !== null &&
-          (assessment.outcome === 'skipped-origin' ||
-            (assessment.outcome === 'arrival-not-recorded' && assessment.actualDeparture === null))
+          (assessment.outcome === 'skipped-origin' || assessment.outcome === 'cancelled')
         ) {
           onward = await lookup(request.from, assessment.scheduledDeparture, true);
         }

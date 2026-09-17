@@ -103,24 +103,24 @@ describe('the threshold boundary', () => {
   });
 });
 
-describe('a service with no arrival recorded', () => {
+describe('a service with no times recorded', () => {
   const cancelled = record([
     call('BTN', { scheduledDeparture: '0715', lateCancReason: '574' }),
     call('VIC', { scheduledArrival: '0817', lateCancReason: '574' }),
   ], { date: '2026-09-09' });
 
-  it('is treated as a candidate rather than as an on-time arrival', () => {
+  it('is treated as cancelled, and as a candidate', () => {
     const result = classify(cancelled, { thresholdMinutes: 15 });
-    expect(result.outcome).toBe('arrival-not-recorded');
+    expect(result.outcome).toBe('cancelled');
     expect(result.looksClaimable).toBe(true);
     expect(result.delayMinutes).toBeNull();
   });
 
-  it('is marked as inferred, because HSP never says "cancelled"', () => {
+  it('says plainly that it is treated as cancelled, while recording why', () => {
     const result = classify(cancelled, { thresholdMinutes: 15 });
     expect(result.evidence).toBe('inferred-from-absent-times');
-    expect(result.needsManualCheck).toBe(true);
-    expect(result.notes.join(' ')).toContain('does not report cancellations directly');
+    expect(result.notes.join(' ')).toContain('No times were recorded for this train from BTN onwards');
+    expect(result.notes.join(' ')).toContain('treated as cancelled');
   });
 
   it('says that reason code 574 settles nothing', () => {
@@ -129,19 +129,25 @@ describe('a service with no arrival recorded', () => {
     expect(result.notes.join(' ')).toContain('both');
   });
 
-  it('notes when no departure was recorded either', () => {
-    const result = classify(cancelled, { thresholdMinutes: 15 });
-    expect(result.notes.join(' ')).toContain('no departure was recorded either');
-  });
-
-  it('does not claim a departure was missing when it was recorded', () => {
+  it('does not call a train cancelled when it was recorded leaving', () => {
     const departedThenVanished = record([
       call('BTN', { scheduledDeparture: '0715', actualDeparture: '0716' }),
       call('VIC', { scheduledArrival: '0817' }),
     ]);
     const result = classify(departedThenVanished, { thresholdMinutes: 15 });
     expect(result.outcome).toBe('arrival-not-recorded');
-    expect(result.notes.join(' ')).not.toContain('no departure was recorded either');
+    expect(result.looksClaimable).toBe(true);
+    expect(result.notes.join(' ')).toContain('left BTN but no arrival was recorded');
+    expect(result.notes.join(' ')).not.toContain('cancelled');
+  });
+
+  it('still calls it cancelled when the train ran earlier in its journey, before the origin', () => {
+    const cancelledBeforeReachingUs = record([
+      call('PRP', { scheduledDeparture: '0710', actualDeparture: '0710' }),
+      call('BTN', { scheduledDeparture: '0715' }),
+      call('VIC', { scheduledArrival: '0817' }),
+    ]);
+    expect(classify(cancelledBeforeReachingUs, { thresholdMinutes: 15 }).outcome).toBe('cancelled');
   });
 });
 
@@ -476,7 +482,7 @@ describe('a service that ran but abandoned the journey', () => {
     );
     const cancelled = classify(nothingRan, { from: 'LBG', to: 'HSK', date: '2026-09-07' });
 
-    expect(cancelled.outcome).toBe('arrival-not-recorded');
+    expect(cancelled.outcome).toBe('cancelled');
     expect(cancelled.lastRecordedCall).toBeNull();
     expect(cancelled.looksClaimable).toBe(true);
   });
@@ -653,13 +659,13 @@ describe('a train that does not take you to your destination', () => {
 
     it('is measured on the next train to leave the origin after it was due', () => {
       const result = judge(cancelled, { onwardConnection: train('LBG', '1905', '2002', 30, 30) });
-      expect(result.outcome).toBe('arrival-not-recorded');
+      expect(result.outcome).toBe('cancelled');
       expect(result.delayMinutes).toBe(30);
       expect(result.looksClaimable).toBe(true);
       expect(result.needsManualCheck).toBe(true);
       expect(result.evidence).toBe('assumed-onward-connection');
       expect(result.notes.join(' ')).toContain('left LBG at 19:05, 30 minutes after yours was due to leave');
-      expect(describeOutcome(result)).toContain('On the next train from LBG you would have got in at 20:02, 30 minutes late in total');
+      expect(describeOutcome(result)).toContain('This train was cancelled. On the next train from LBG you would have got in at 20:02, 30 minutes late in total');
     });
 
     it('can find a cancellation cost less than the threshold, and says to check', () => {

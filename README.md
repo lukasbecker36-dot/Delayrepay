@@ -106,11 +106,13 @@ test needs updating before it can honestly claim to have checked it.
 
 Three behaviours follow directly from HSP's limitations, and all three are load-bearing:
 
-- **A cancelled train is inferred, never reported.** HSP has no cancellation
-  field, so a missing arrival is the strongest signal available. Those journeys
-  come back as `arrival-not-recorded`, flagged claimable *and* flagged for a
-  manual check. Reason code 574 is attached to both delays and cancellations,
-  so it is surfaced and explicitly described as settling nothing.
+- **A train with no recorded times is treated as cancelled.** HSP has no
+  cancellation field, but a train that ran leaves times behind. When nothing is
+  recorded from the origin on, the journey comes back as `cancelled` and is
+  measured on the next train from the origin. A train recorded leaving and then
+  never again is `arrival-not-recorded`, not called cancelled. Reason code 574
+  is attached to both delays and cancellations, so it is surfaced and explicitly
+  described as settling nothing.
 - **A train HSP never saw is surfaced, not dropped.** A service struck from the
   day's plan — as happens during industrial action — is simply absent. Silence
   would read as "your train was fine", so those days come back as

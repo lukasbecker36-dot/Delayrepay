@@ -52,8 +52,11 @@ export function describeOutcome(assessment: JourneyAssessment): string {
   const measured =
     assessment.change === null
       ? `Arrived ${describeLateness(assessment.delayMinutes ?? 0)}`
-      : `Arrived at ${assessment.to} ${describeLateness(assessment.delayMinutes ?? 0)}, ` +
-        `changing at ${assessment.change.via}`;
+      : assessment.change.replacement !== null
+        ? `Your train did not reach ${assessment.change.via}; on the next trains you would ` +
+          `have arrived at ${assessment.to} ${describeLateness(assessment.delayMinutes ?? 0)}`
+        : `Arrived at ${assessment.to} ${describeLateness(assessment.delayMinutes ?? 0)}, ` +
+          `changing at ${assessment.change.via}`;
 
   switch (assessment.outcome) {
     case 'delayed':

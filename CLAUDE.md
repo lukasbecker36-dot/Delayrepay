@@ -179,8 +179,15 @@ Junction:
 - The delay is measured at the final destination. The operator responsible is
   the one whose delay first broke the plan; if every connection was made, the
   operator of the last leg.
-- A first train that never reaches the change station is reported on its own
-  (cancelled, stopped short). Following that journey further is not built.
+- **A first train that never reaches the change station** is followed from
+  where it left the passenger, by the same first-train-available rule: from
+  the origin at its booked departure if it never ran (no change time - they
+  were on the platform), or from the last station it was recorded at, allowing
+  that station's change time, if it stopped short. That train's arrival goes
+  through the connection against the original plan, and the first train's
+  operator answers for a broken plan. Always flagged to check. On 25 August 2026
+  the 07:03 from Hassocks never ran; the 07:32 reached Clapham Junction at 08:28,
+  in time for the planned 08:38 - 2 minutes late, not a claim.
 
 **HSP's London Overground data has gaps, and they decide results.** Over 21
 weekdays at Clapham Junction, Southern's 07:39 was recorded every day; each

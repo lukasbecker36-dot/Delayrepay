@@ -79,6 +79,23 @@ export type ChangeCause =
   /** The connection was there to be caught; any delay happened on it. */
   | 'connection-late';
 
+/**
+ * How someone reached the change station when their first train did not take
+ * them there - the train they are measured as having caught instead.
+ */
+export interface ReplacementLeg {
+  /** Why the first train did not get them to the change station. */
+  readonly reason: 'cancelled' | 'stopped-short';
+  /** Where it left them: the origin if it never ran, else the last station it was recorded at. */
+  readonly station: string;
+  /** From when they could leave that station, "HHMM". */
+  readonly readyAt: string;
+  /** Operator of the replacement train. */
+  readonly tocCode: string | null;
+  /** The first train that actually left `station` for the change station. */
+  readonly train: OnwardConnection;
+}
+
 export interface ChangeAssessment {
   /** The change station. */
   readonly via: string;
@@ -116,6 +133,12 @@ export interface ChangeAssessment {
    * Equal to `delayMinutes` when there are no gaps. Never more than it.
    */
   readonly bestCaseDelayMinutes: number | null;
+  /**
+   * Set when the first train never reached the change station and the journey
+   * is measured on the train that could have carried them there instead. Null
+   * when the first train got there itself.
+   */
+  readonly replacement: ReplacementLeg | null;
 }
 
 export interface AssessChangeInput {
@@ -133,6 +156,12 @@ export interface AssessChangeInput {
     arrivingToc: string | null,
     departingToc: string | null,
   ) => ResolvedChangeTime;
+  /**
+   * The operator of the train that actually arrived at `via`, when that was not
+   * `firstLeg` - a replacement for a first train that never got there. The plan
+   * still uses `firstLeg`'s operator; the change actually made uses this one.
+   */
+  readonly arrivedOnToc?: string | null;
 }
 
 function sameStation(a: string, b: string): boolean {
@@ -183,6 +212,7 @@ function findRecord(
  */
 export function assessChange(input: AssessChangeInput): ChangeAssessment | null {
   const { firstLeg, from, via, to } = input;
+  const arrivedOn = input.arrivedOnToc === undefined ? firstLeg.tocCode : input.arrivedOnToc;
 
   const first = legCalls(firstLeg, from, via);
   const plannedArrivalAtVia = first?.arrival.scheduledArrival ?? null;
@@ -240,6 +270,7 @@ export function assessChange(input: AssessChangeInput): ChangeAssessment | null 
       missingFromData: [],
       arrivalNotRecorded: [],
       bestCaseDelayMinutes: null,
+      replacement: null,
     };
   }
 
@@ -249,7 +280,7 @@ export function assessChange(input: AssessChangeInput): ChangeAssessment | null 
     to,
     setDownAt: actualArrivalAtVia as string,
     bookedArrival: planned.scheduledArrival,
-    changeTimeFor: (departingToc) => input.changeTimeFor(firstLeg.tocCode, departingToc),
+    changeTimeFor: (departingToc) => input.changeTimeFor(arrivedOn, departingToc),
   });
 
   const plannedRecord = findRecord(input.onward, planned, via, to);
@@ -322,7 +353,7 @@ export function assessChange(input: AssessChangeInput): ChangeAssessment | null 
       to,
       setDownAt: actualArrivalAtVia as string,
       bookedArrival: planned.scheduledArrival,
-      changeTimeFor: (departingToc) => input.changeTimeFor(firstLeg.tocCode, departingToc),
+      changeTimeFor: (departingToc) => input.changeTimeFor(arrivedOn, departingToc),
     });
     bestCaseDelayMinutes = best?.totalDelayMinutes ?? delayMinutes;
   }
@@ -343,6 +374,7 @@ export function assessChange(input: AssessChangeInput): ChangeAssessment | null 
       unrecordedArrivals.map((record) => legCalls(record, via, to)?.departure.scheduledDeparture ?? null),
     ),
     bestCaseDelayMinutes,
+    replacement: null,
   };
 }
 

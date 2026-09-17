@@ -376,3 +376,115 @@ describe('scoring a journey with a change', () => {
     expect(missing.to).toBe('SPB');
   });
 });
+
+describe('a first train that never reached the change station', () => {
+  /** A Hassocks train to CLJ, as a replacement candidate. */
+  function toClapham(rid: string, from: string, departed: string, arrived: string, toc = 'SN'): ServiceRecord {
+    return {
+      rid,
+      date: DATE,
+      tocCode: toc,
+      calls: [
+        call(from, { scheduledDeparture: departed, actualDeparture: departed }),
+        call('CLJ', { scheduledArrival: arrived, actualArrival: arrived }),
+      ],
+    };
+  }
+
+  const ONWARD = TIMETABLE.map((slot) => ran(slot));
+
+  function classifyWithReplacements(first: ServiceRecord, candidates: readonly ServiceRecord[] | null) {
+    return classifyJourneyWithChange({
+      record: first,
+      from: 'HSK',
+      via: 'CLJ',
+      to: 'SPB',
+      date: DATE,
+      today: TODAY,
+      timetable: TIMETABLE,
+      onward: ONWARD,
+      changeTimeFor: CLAPHAM,
+      replacementCandidates: candidates,
+      changeTimeAt: () => ({ minutes: 3, fromTimetable: true }),
+    });
+  }
+
+  it('measures a cancelled train from the next one to leave the origin after it was due', () => {
+    // The 07:03 never ran. The 07:33 got to CLJ at 08:22: in time for the 08:38?
+    // No - the plan was the 08:11 (due 08:24), which needs 10 minutes onto the
+    // Overground, so the 08:38 (in 08:52) it is: 28 minutes, on Southern.
+    const result = classifyWithReplacements(firstTrain(null, null), [
+      toClapham('before', 'HSK', '0633', '0722'),
+      toClapham('next', 'HSK', '0733', '0822'),
+      toClapham('later', 'HSK', '0803', '0852'),
+    ]);
+
+    expect(result.change?.replacement?.reason).toBe('cancelled');
+    expect(result.change?.replacement?.train.rid).toBe('next');
+    expect(result.change?.actualArrivalAtVia).toBe('0822');
+    expect(result.delayMinutes).toBe(28);
+    expect(result.change?.cause).toBe('first-train-late');
+    expect(result.operator?.name).toBe('Southern');
+    expect(result.looksClaimable).toBe(true);
+    expect(result.needsManualCheck).toBe(true);
+    expect(result.evidence).toBe('assumed-onward-connection');
+
+    const notes = result.notes.join(' ');
+    expect(notes).toContain('No departure was recorded for this train');
+    expect(notes).toContain('left HSK at 07:33, 30 minutes after yours was due to leave');
+    expect(notes).toContain('That train reached CLJ at 08:22');
+    expect(describeOutcome(result)).toContain('Your train did not reach CLJ; on the next trains you would have arrived at SPB 28 minutes late');
+  });
+
+  it('counts a late-running earlier train that left after the cancelled one was due', () => {
+    const result = classifyWithReplacements(firstTrain(null, null), [
+      toClapham('late-0633', 'HSK', '0705', '0754'),
+      toClapham('next', 'HSK', '0733', '0822'),
+    ]);
+    expect(result.change?.replacement?.train.rid).toBe('late-0633');
+  });
+
+  it('can find a cancellation cost nothing at all', () => {
+    // A late-running earlier train still made the planned 08:11.
+    const result = classifyWithReplacements(firstTrain(null, null), [toClapham('late', 'HSK', '0704', '0753')]);
+    expect(result.delayMinutes).toBe(0);
+    expect(result.looksClaimable).toBe(false);
+    expect(result.needsManualCheck).toBe(true);
+  });
+
+  it('follows a train that stopped short from where it was last recorded', () => {
+    // Stopped at HHE at 07:10; the change time there is 3 minutes.
+    const stoppedShort = firstTrain(null, '0703');
+    const result = classifyWithReplacements(stoppedShort, [
+      toClapham('too-soon', 'HHE', '0712', '0756'),
+      toClapham('next', 'HHE', '0720', '0804'),
+    ]);
+
+    expect(result.change?.replacement?.reason).toBe('stopped-short');
+    expect(result.change?.replacement?.station).toBe('HHE');
+    expect(result.change?.replacement?.train.rid).toBe('next');
+    // In at 08:04 - 12 minutes late, still 7 short of the 10 needed for the 08:11.
+    expect(result.change?.cause).toBe('first-train-late');
+    expect(result.delayMinutes).toBe(28);
+
+    const notes = result.notes.join(' ');
+    expect(notes).toContain('last recorded at HHE at 07:10');
+    expect(notes).toContain('left HHE at 07:20');
+    expect(notes).toContain('A train also left at 07:12');
+  });
+
+  it('says so when no train from there was recorded, and keeps the journey flagged', () => {
+    const result = classifyWithReplacements(firstTrain(null, null), []);
+    expect(result.outcome).toBe('arrival-not-recorded');
+    expect(result.looksClaimable).toBe(true);
+    expect(result.change).toBeNull();
+    expect(result.notes.join(' ')).toContain('No train from HSK to CLJ was recorded leaving within 90 minutes of 07:03');
+  });
+
+  it('reports the journey as before when the trains from there were not looked up', () => {
+    const result = classifyWithReplacements(firstTrain(null, null), null);
+    expect(result.outcome).toBe('arrival-not-recorded');
+    expect(result.notes.join(' ')).toContain('could not be assessed');
+    expect(result.notes.join(' ')).not.toContain('No train from HSK');
+  });
+});

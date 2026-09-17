@@ -615,3 +615,115 @@ describe('a journey with a change', () => {
     expect(result.failures.some((f) => f.date === DAY)).toBe(true);
   });
 });
+
+describe('a journey with a change whose first train never reached the change', () => {
+  const DAY = '2026-09-07';
+
+  function callAt(location: string, fields: Partial<ServiceRecord['calls'][number]>) {
+    return {
+      location,
+      scheduledDeparture: null,
+      scheduledArrival: null,
+      actualDeparture: null,
+      actualArrival: null,
+      lateCancReason: null,
+      ...fields,
+    };
+  }
+
+  const CANCELLED: ServiceRecord = {
+    rid: '202609071000001',
+    date: DAY,
+    tocCode: 'SN',
+    calls: [
+      callAt('BTN', { scheduledDeparture: '0700' }),
+      callAt('CLJ', { scheduledArrival: '0752' }),
+    ],
+  };
+
+  function train(rid: string, from: string, dep: string, to: string, arr: string): ServiceRecord {
+    return {
+      rid,
+      date: DAY,
+      tocCode: 'SN',
+      calls: [
+        callAt(from, { scheduledDeparture: dep, actualDeparture: dep }),
+        callAt(to, { scheduledArrival: arr, actualArrival: arr }),
+      ],
+    };
+  }
+
+  const RECORDS: Record<string, ServiceRecord> = {
+    [CANCELLED.rid]: CANCELLED,
+    '202609074000001': train('202609074000001', 'BTN', '0730', 'CLJ', '0822'),
+    '202609072000002': train('202609072000002', 'CLJ', '0838', 'KPA', '0849'),
+  };
+
+  function replacementClient(options: { replacementsThrow?: boolean } = {}) {
+    const queries: string[] = [];
+    const client = {
+      async serviceMetrics(query: { fromLocation: string; toLocation: string; fromTime: string; toTime: string; fromDate: string }) {
+        queries.push(`${query.fromLocation}-${query.toLocation}@${query.fromTime}-${query.toTime}`);
+        if (query.fromLocation === 'CLJ') {
+          return [
+            { rids: ['202609072000002'], originLocation: 'CLJ', destinationLocation: 'KPA', scheduledDeparture: '0838', scheduledArrival: '0849', tocCode: 'SN' },
+          ];
+        }
+        if (query.fromTime === '0655') {
+          return [
+            { rids: [CANCELLED.rid], originLocation: 'BTN', destinationLocation: 'CLJ', scheduledDeparture: '0700', scheduledArrival: '0752', tocCode: 'SN' },
+          ];
+        }
+        if (options.replacementsThrow) throw new HspError('unavailable', 'down');
+        return [
+          { rids: [CANCELLED.rid, '202609074000001'], originLocation: 'BTN', destinationLocation: 'CLJ', scheduledDeparture: '0730', scheduledArrival: '0822', tocCode: 'SN' },
+        ];
+      },
+      async serviceDetails(rid: string) {
+        const record = RECORDS[rid];
+        if (!record) throw new HspError('unknown', `no fixture for ${rid}`);
+        return record;
+      },
+    } as unknown as HspClient;
+    return { client, queries };
+  }
+
+  const request: ScanRequest = {
+    ...REQUEST,
+    via: 'CLJ',
+    to: 'KPA',
+    fromDate: DAY,
+    toDate: DAY,
+    fromTime: '0655',
+    toTime: '0705',
+    scheduledDeparture: '0700',
+  };
+
+  it('looks for trains from the origin from when the cancelled one was due', async () => {
+    const { client, queries } = replacementClient();
+    await runScan(client, request);
+    // 07:00 due, less 30 minutes, an hour at a time.
+    expect(queries).toContain('BTN-CLJ@0630-0729');
+  });
+
+  it('scores the journey on the replacement and the connection it reached', async () => {
+    const { client } = replacementClient();
+    const result = await runScan(client, request);
+    const journey = result.assessments[0];
+
+    // In at CLJ 08:22, the 08:38 was the plan anyway: on time.
+    expect(journey?.change?.replacement?.train.rid).toBe('202609074000001');
+    expect(journey?.delayMinutes).toBe(0);
+    expect(journey?.needsManualCheck).toBe(true);
+  });
+
+  it('keeps the flagged journey when the trains from the origin cannot be read', async () => {
+    const { client } = replacementClient({ replacementsThrow: true });
+    const result = await runScan(client, request);
+    const journey = result.assessments[0];
+
+    expect(journey?.outcome).toBe('arrival-not-recorded');
+    expect(journey?.looksClaimable).toBe(true);
+    expect(result.failures.some((f) => f.date === DAY && f.message.includes('no delay figure'))).toBe(true);
+  });
+});

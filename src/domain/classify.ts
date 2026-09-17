@@ -38,7 +38,7 @@ const AMBIGUOUS_REASON_CODE = '574';
  * cannot interpret is still worth handing over: the operator can read it, and
  * the user is the one making the claim.
  */
-function reasonCodeNotes(reasonCode: string | null): readonly string[] {
+export function reasonCodeNotes(reasonCode: string | null): readonly string[] {
   if (reasonCode === null) return [];
   if (reasonCode === AMBIGUOUS_REASON_CODE) {
     return [

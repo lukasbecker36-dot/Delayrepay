@@ -133,6 +133,44 @@ const CHANGE_JOURNEYS = [
   // Planned connection missing from the data: 57 minutes on the trains recorded,
   // on time if it ran.
   withChange('0752', { departed: '0811', arrived: null }),
+  // The first train cancelled, measured on the next one to Clapham Junction.
+  classifyJourneyWithChange({
+    record: {
+      rid: 'first',
+      date: '2026-09-08',
+      tocCode: 'SN',
+      calls: [call('BTN', { scheduledDeparture: '0700' }), call('CLJ', { scheduledArrival: '0752' })],
+    },
+    from: 'BTN',
+    via: 'CLJ',
+    to: 'KPA',
+    date: '2026-09-08',
+    today: TODAY,
+    timetable: [{ tocCode: 'SN', scheduledDeparture: '0838', scheduledArrival: '0849' }],
+    onward: [
+      {
+        rid: 'on',
+        date: '2026-09-08',
+        tocCode: 'SN',
+        calls: [
+          call('CLJ', { scheduledDeparture: '0838', actualDeparture: '0838' }),
+          call('KPA', { scheduledArrival: '0849', actualArrival: '0849' }),
+        ],
+      },
+    ],
+    replacementCandidates: [
+      {
+        rid: 'next',
+        date: '2026-09-08',
+        tocCode: 'SN',
+        calls: [
+          call('BTN', { scheduledDeparture: '0730', actualDeparture: '0730' }),
+          call('CLJ', { scheduledArrival: '0822', actualArrival: '0822' }),
+        ],
+      },
+    ],
+    changeTimeFor: () => ({ minutes: 10, fromTimetable: true }),
+  }),
 ];
 
 describe('the words the tool is allowed to use', () => {

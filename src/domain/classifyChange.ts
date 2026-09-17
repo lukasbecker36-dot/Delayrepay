@@ -2,17 +2,39 @@
  * One honest answer about one journey with a change.
  *
  * The first train is judged by the single-train rules in classify.ts, as far as
- * the change station. If it never got there - cancelled, stopped short, not in
- * the data - that answer stands, because there is no connection to assess. If
- * it did, connection.ts works out the rest, and this file turns that into the
- * same JourneyAssessment every other result uses, scored against the threshold
- * of the operator responsible for the delay.
+ * the change station. If it got there, connection.ts works out the rest, and
+ * this file turns that into the same JourneyAssessment every other result uses,
+ * scored against the threshold of the operator responsible for the delay.
+ *
+ * If it never got there, the journey is not over. Under the same rule used
+ * everywhere else - operators check a claim against the first train that could
+ * have been caught - the passenger is measured on the first train that actually
+ * left for the change station from where they were left:
+ *
+ * - cancelled (no departure recorded at the origin): from the origin, at the
+ *   first train's booked departure, with no change time - they were already on
+ *   the platform;
+ * - stopped short: from the last station it was recorded at, at the time it was
+ *   recorded there, allowing that station's change time.
+ *
+ * That train's arrival then goes through the connection as normal, against the
+ * original plan. Whatever the connection shows, the delay began with the first
+ * train, so its operator answers for it if the plan was broken. The result is
+ * always flagged to check: a cancellation is inferred, and which train was
+ * caught is not something the data can see.
  *
  * Pure. No network, no clock.
  */
 
-import { classifyJourney, thresholdNotes } from './classify.js';
-import { assessChange, type AssessChangeInput, type ChangeAssessment } from './connection.js';
+import { classifyJourney, reasonCodeNotes, thresholdNotes } from './classify.js';
+import {
+  assessChange,
+  type AssessChangeInput,
+  type ChangeAssessment,
+  type ReplacementLeg,
+} from './connection.js';
+import { pickOnwardConnection } from './onward.js';
+import { resolveChangeTime, type ResolvedChangeTime } from './changeTimes.js';
 import { findOperator, resolveThreshold } from './operators.js';
 import { spansClockChange } from './clockChange.js';
 import { bankHolidayNote } from './bankHolidays.js';
@@ -43,6 +65,83 @@ export interface ClassifyChangeInput {
    * says so whenever the timetable had one to leave out.
    */
   readonly leaveOutOperators?: readonly string[];
+  /**
+   * This day's records of trains from wherever the first train left the user
+   * to `via`, for when it never got there. Null or absent when they were not
+   * looked up - the journey is then reported without a delay figure.
+   */
+  readonly replacementCandidates?: readonly ServiceRecord[] | null;
+  /** The change time at any station, for changing onto a replacement train. */
+  readonly changeTimeAt?: (
+    station: string,
+    arrivingToc: string | null,
+    departingToc: string | null,
+  ) => ResolvedChangeTime;
+}
+
+/** Where a first train that never reached the change station left the user, and from when. */
+export interface ReplacementStart {
+  readonly reason: ReplacementLeg['reason'];
+  readonly station: string;
+  readonly readyAt: string;
+}
+
+/**
+ * Where to look for a way to the change station, or null when the first train
+ * got there, or when what happened to it is too unclear to follow - it left
+ * the origin but was recorded nowhere after, for instance.
+ */
+export function replacementStart(
+  record: ServiceRecord,
+  from: string,
+  via: string,
+  date: string,
+  today: string,
+): ReplacementStart | null {
+  const firstLeg = classifyJourney({ record, from, to: via, date, today });
+  if (firstLeg.outcome === 'did-not-call' && firstLeg.lastRecordedCall !== null) {
+    return {
+      reason: 'stopped-short',
+      station: firstLeg.lastRecordedCall.location,
+      readyAt: firstLeg.lastRecordedCall.time,
+    };
+  }
+  if (
+    firstLeg.outcome === 'arrival-not-recorded' &&
+    firstLeg.actualDeparture === null &&
+    firstLeg.scheduledDeparture !== null
+  ) {
+    return { reason: 'cancelled', station: from, readyAt: firstLeg.scheduledDeparture };
+  }
+  return null;
+}
+
+/** The first train that actually left `start.station` for `via`, as a replacement leg. */
+export function pickReplacement(input: {
+  readonly start: ReplacementStart;
+  readonly candidates: readonly ServiceRecord[];
+  readonly via: string;
+  /** When the first train was due at `via`, "HHMM". */
+  readonly bookedArrivalAtVia: string;
+  readonly firstTocCode: string | null;
+  readonly changeTimeAt: NonNullable<ClassifyChangeInput['changeTimeAt']>;
+}): ReplacementLeg | null {
+  const { start, candidates, via } = input;
+  const train = pickOnwardConnection({
+    candidates,
+    from: start.station,
+    to: via,
+    setDownAt: start.readyAt,
+    bookedArrival: input.bookedArrivalAtVia,
+    // Someone whose train never left is already on the platform.
+    changeTimeFor: (departingToc) =>
+      start.reason === 'cancelled'
+        ? { minutes: 0, fromTimetable: true }
+        : input.changeTimeAt(start.station, input.firstTocCode, departingToc),
+  });
+  if (train === null) return null;
+  const tocCode = candidates.find((record) => record.rid === train.rid)?.tocCode ?? null;
+  return { ...start, tocCode, train };
 }
 
 function operatorName(tocCode: string | null): string {
@@ -77,7 +176,7 @@ export function classifyJourneyWithChange(input: ClassifyChangeInput): JourneyAs
     ...new Set(input.timetable.filter((slot) => !kept(slot.tocCode)).map((slot) => operatorName(slot.tocCode))),
   ];
 
-  const change =
+  let change =
     record === null
       ? null
       : assessChange({
@@ -90,9 +189,48 @@ export function classifyJourneyWithChange(input: ClassifyChangeInput): JourneyAs
           changeTimeFor: input.changeTimeFor,
         });
 
-  // It never got to the change station, so there is no connection to judge.
+  // It never got to the change station. Follow the passenger from where they
+  // were left, if the trains from there were looked up.
+  let noReplacementFrom: ReplacementStart | null = null;
+  if (change === null && record !== null && input.replacementCandidates != null) {
+    const start = replacementStart(record, from, via, date, today);
+    const booked = firstLeg.scheduledArrival;
+    if (start !== null && booked !== null) {
+      const leg = pickReplacement({
+        start,
+        candidates: input.replacementCandidates.filter((train) => kept(train.tocCode)),
+        via,
+        bookedArrivalAtVia: booked,
+        firstTocCode: record.tocCode,
+        changeTimeAt: input.changeTimeAt ?? resolveChangeTime,
+      });
+      if (leg === null) {
+        noReplacementFrom = start;
+      } else {
+        const measured = assessChange({
+          firstLeg: arrivingOn(record, from, via, firstLeg.scheduledDeparture, booked, leg.train.arrived),
+          from,
+          via,
+          to,
+          timetable: input.timetable.filter((slot) => kept(slot.tocCode)),
+          onward: input.onward.filter((train) => kept(train.tocCode)),
+          changeTimeFor: input.changeTimeFor,
+          arrivedOnToc: leg.tocCode,
+        });
+        if (measured !== null) change = { ...measured, replacement: leg };
+      }
+    }
+  }
+
+  // Still nothing to judge the connection on.
   if (change === null) {
     const notes = [...firstLeg.notes];
+    if (noReplacementFrom !== null) {
+      notes.push(
+        `No train from ${noReplacementFrom.station} to ${via} was recorded leaving within ` +
+          `90 minutes of ${displayClockTime(noReplacementFrom.readyAt)}.`,
+      );
+    }
     if (record !== null && firstLeg.outcome !== 'service-not-found') {
       notes.push(
         `This train did not get you to ${via}, so the connection there to ${to} ` +
@@ -113,6 +251,72 @@ export function classifyJourneyWithChange(input: ClassifyChangeInput): JourneyAs
         'will not match your journey.',
     ],
   };
+}
+
+/**
+ * The first train as it would have been had it reached the change station when
+ * the replacement did: the same booked times, the replacement's arrival.
+ */
+function arrivingOn(
+  record: ServiceRecord,
+  from: string,
+  via: string,
+  scheduledDeparture: string | null,
+  scheduledArrival: string,
+  actualArrival: string,
+): ServiceRecord {
+  const blank = { actualDeparture: null, actualArrival: null, lateCancReason: null };
+  return {
+    ...record,
+    calls: [
+      { ...blank, location: from, scheduledDeparture, scheduledArrival: null },
+      { ...blank, location: via, scheduledDeparture: null, scheduledArrival, actualArrival },
+    ],
+  };
+}
+
+/** What happened to the first train, and the train taken instead. */
+function replacementNotes(
+  replacement: ReplacementLeg,
+  firstLeg: JourneyAssessment,
+  via: string,
+): readonly string[] {
+  const notes: string[] = [];
+  const { train } = replacement;
+
+  if (replacement.reason === 'cancelled') {
+    notes.push(
+      `No departure was recorded for this train, which usually means it was cancelled.`,
+    );
+    notes.push(...reasonCodeNotes(firstLeg.reasonCode));
+    notes.push(
+      `The first train you could have caught instead left ${replacement.station} at ` +
+        `${displayClockTime(train.departed)}, ${train.waitMinutes} ` +
+        `${train.waitMinutes === 1 ? 'minute' : 'minutes'} after yours was due to leave, ` +
+        `and reached ${via} at ${displayClockTime(train.arrived)}.`,
+    );
+  } else {
+    notes.push(
+      `This train ran but never reached ${via}. It was last recorded at ` +
+        `${replacement.station} at ${displayClockTime(replacement.readyAt)}.`,
+    );
+    notes.push(...reasonCodeNotes(firstLeg.reasonCode));
+    notes.push(
+      `The first train you could have caught from there left ${replacement.station} at ` +
+        `${displayClockTime(train.departed)}, ${articleFor(train.waitMinutes)} ` +
+        `${train.waitMinutes}-minute wait allowing ` +
+        `${changeAllowance(train.changeMinutes, train.changeTimeFromTimetable)}, and reached ` +
+        `${via} at ${displayClockTime(train.arrived)}.`,
+    );
+    if (train.leftInsideChangeTime !== null) {
+      notes.push(
+        `A train also left at ${displayClockTime(train.leftInsideChangeTime)}, too soon ` +
+          'after you were set down to count as a connection. If you did catch it, claim on ' +
+          'that train instead.',
+      );
+    }
+  }
+  return notes;
 }
 
 function scoreChange(
@@ -146,10 +350,12 @@ function scoreChange(
     claimWindow: firstLeg.claimWindow,
   } as const;
 
-  const { planned, caught } = change;
+  const { planned, caught, replacement } = change;
+  if (replacement !== null) notes.push(...replacementNotes(replacement, firstLeg, via));
   const firstName = operatorName(change.firstTocCode);
   const arrivedAtVia =
-    `This train reached ${via} at ${displayClockTime(change.actualArrivalAtVia)}`;
+    `${replacement === null ? 'This' : 'That'} train reached ${via} at ` +
+    displayClockTime(change.actualArrivalAtVia);
 
   if (planned === null) {
     notes.push(
@@ -305,7 +511,8 @@ function scoreChange(
     );
   }
 
-  const assumedConnection = !change.madePlannedConnection;
+  // A replacement rests on an inferred cancellation and an assumed train.
+  const assumedConnection = !change.madePlannedConnection || replacement !== null;
   return {
     ...shared,
     scheduledArrival: planned.scheduledArrival,

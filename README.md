@@ -94,7 +94,7 @@ results *your* journeys rather than every service in the band.
 | `src/cli.ts` | The verification tool: run a real commute, check it against memory. |
 
 The domain layer has no dependency on the HSP layer, so the judgement can be
-tested without a network. 229 tests, all offline.
+tested without a network. 238 tests, all offline.
 
 ## What the checker will and will not say
 
